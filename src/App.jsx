@@ -1,0 +1,45 @@
+import { Routes, Route } from 'react-router-dom';
+import Navbar from './components/Navbar';
+import Footer from './components/Footer';
+import TickerBanner from './components/TickerBanner';
+import Home from './pages/Home';
+import Login from './pages/Login';
+import BecomeSeller from './pages/BecomeSeller';
+import AdminDashboard from './pages/AdminDashboard';
+import SellerDashboard from './pages/SellerDashboard';
+import Checkout from './pages/Checkout';
+import OrderConfirmation from './pages/OrderConfirmation';
+import Orders from './pages/Orders';
+import OrderDetail from './pages/OrderDetail';
+import ProductDetail from './pages/ProductDetail';
+import Wishlist from './pages/Wishlist';
+import CustomerProfile from './pages/CustomerProfile';
+
+function App() {
+  return (
+    <div className="min-h-screen bg-gray-100 flex flex-col">
+      <Navbar />
+      <TickerBanner />
+      <div className="flex-1">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/become-seller" element={<BecomeSeller />} />
+          <Route path="/admin" element={<AdminDashboard />} />
+          <Route path="/admin/customer/:id" element={<CustomerProfile />} />
+          <Route path="/admin/enter-seller/:sellerId" element={<SellerDashboard />} />
+          <Route path="/seller" element={<SellerDashboard />} />
+          <Route path="/checkout" element={<Checkout />} />
+          <Route path="/order-confirmation/:id" element={<OrderConfirmation />} />
+          <Route path="/orders" element={<Orders />} />
+          <Route path="/order/:id" element={<OrderDetail />} />
+          <Route path="/product/:id" element={<ProductDetail />} />
+          <Route path="/wishlist" element={<Wishlist />} />
+        </Routes>
+      </div>
+      <Footer />
+    </div>
+  );
+}
+
+export default App;

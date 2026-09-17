@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Ticker Banner Animation */
+@keyframes ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.ticker-wrapper {
+  overflow: hidden;
+  width: 100%;
+  position: relative;
+}
+
+.ticker-content {
+  display: inline-flex;
+  animation: ticker-scroll 30s linear infinite;
+  will-change: transform;
+  white-space: nowrap;
+}
+
+.ticker-content span {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
