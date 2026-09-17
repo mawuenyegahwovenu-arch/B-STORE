@@ -11,12 +11,10 @@ export default function NotificationBell() {
   useEffect(() => {
     if (!user) return;
     loadNotifications();
-    // Poll every 30 seconds
     const interval = setInterval(loadNotifications, 30000);
     return () => clearInterval(interval);
   }, [user]);
 
-  // Close on outside click
   useEffect(() => {
     function handleClick(e) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
@@ -71,36 +69,57 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-80 max-w-[90vw] bg-white text-gray-800 rounded-xl shadow-2xl border z-50 max-h-96 overflow-y-auto">
-          <div className="flex justify-between items-center px-4 py-3 border-b sticky top-0 bg-white">
-            <h3 className="font-bold text-sm">Notifications</h3>
-            {unreadCount > 0 && (
-              <button onClick={markAllRead} className="text-xs text-indigo-600 hover:underline">
-                Mark all read
-              </button>
-            )}
-          </div>
+        <>
+          {/* Mobile backdrop */}
+          <div
+            className="fixed inset-0 bg-black bg-opacity-40 z-40 md:hidden"
+            onClick={() => setOpen(false)}
+          />
 
-          {notifications.length === 0 ? (
-            <p className="text-center text-gray-500 text-sm py-8">No notifications yet.</p>
-          ) : (
-            <div className="divide-y">
-              {notifications.map(n => (
-                <div
-                  key={n.id}
-                  onClick={() => !n.is_read && markAsRead(n.id)}
-                  className={`px-4 py-3 text-sm cursor-pointer hover:bg-gray-50 ${!n.is_read ? 'bg-indigo-50' : ''}`}
+          {/* Panel - full width on mobile, compact on desktop */}
+          <div className="fixed md:absolute top-16 md:top-auto right-2 left-2 md:left-auto md:right-0 md:mt-2 md:w-96 bg-white text-gray-800 rounded-xl shadow-2xl border z-50 max-h-[80vh] md:max-h-96 flex flex-col">
+            {/* Header */}
+            <div className="flex justify-between items-center px-4 py-3 border-b">
+              <h3 className="font-bold text-sm">Notifications</h3>
+              <div className="flex items-center gap-2">
+                {unreadCount > 0 && (
+                  <button onClick={markAllRead} className="text-xs text-indigo-600 hover:underline">
+                    Mark all read
+                  </button>
+                )}
+                <button
+                  onClick={() => setOpen(false)}
+                  className="text-gray-400 hover:text-gray-600 text-xl leading-none md:hidden"
                 >
-                  <p className="font-semibold text-gray-800">{n.title}</p>
-                  <p className="text-gray-600 text-xs mt-0.5">{n.message}</p>
-                  <p className="text-gray-400 text-[10px] mt-1">
-                    {new Date(n.created_at).toLocaleString('en-GB')}
-                  </p>
-                </div>
-              ))}
+                  ×
+                </button>
+              </div>
             </div>
-          )}
-        </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1">
+              {notifications.length === 0 ? (
+                <p className="text-center text-gray-500 text-sm py-8">No notifications yet.</p>
+              ) : (
+                <div className="divide-y">
+                  {notifications.map(n => (
+                    <div
+                      key={n.id}
+                      onClick={() => !n.is_read && markAsRead(n.id)}
+                      className={`px-4 py-3 text-sm cursor-pointer hover:bg-gray-50 ${!n.is_read ? 'bg-indigo-50' : ''}`}
+                    >
+                      <p className="font-semibold text-gray-800 break-words">{n.title}</p>
+                      <p className="text-gray-600 text-xs mt-0.5 break-words">{n.message}</p>
+                      <p className="text-gray-400 text-[10px] mt-1">
+                        {new Date(n.created_at).toLocaleString('en-GB')}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

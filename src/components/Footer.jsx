@@ -61,7 +61,7 @@ export default function Footer() {
               📶Affordable data bundles for MTN, Telecel & AirtelTigo.
             </p>
             <a
-              href="https://chat.whatsapp.com/E4gkQqa6s3yLmfgLRyiPK"
+              href="https://chat.whatsapp.com/E4gkQqa6s3yLmfgLKRyiPK"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2 rounded-lg transition"

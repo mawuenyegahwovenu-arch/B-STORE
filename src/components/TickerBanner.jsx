@@ -1,4 +1,4 @@
-const WHATSAPP_GROUP = 'https://chat.whatsapp.com/E4gkQqa6s3yLmfgLRyiPK';
+const WHATSAPP_GROUP = 'https://chat.whatsapp.com/E4gkQqa6s3yLmfgLKRyiPK';
 
 export default function TickerBanner() {
   const text = '📱 Get affordable data bundles from 1GB at GH₵4.7 to 100GB — tap to join my WhatsApp 📶data group ';
