@@ -6,11 +6,14 @@ import { useAuth } from '../context/AuthContext';
 export default function AdminDashboard() {
   const { isAdmin, user } = useAuth();
   const [tab, setTab] = useState('overview');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [unifiedSearch, setUnifiedSearch] = useState('');
   const [pendingSellers, setPendingSellers] = useState([]);
   const [pendingProducts, setPendingProducts] = useState([]);
   const [allSellers, setAllSellers] = useState([]);
   const [allCustomers, setAllCustomers] = useState([]);
   const [allProducts, setAllProducts] = useState([]);
+  const [allOrderItems, setAllOrderItems] = useState([]);
   const [categories, setCategories] = useState([]);
   const [orders, setOrders] = useState([]);
   const [approvedSellers, setApprovedSellers] = useState([]);
@@ -21,6 +24,14 @@ export default function AdminDashboard() {
   const [editingProduct, setEditingProduct] = useState(null);
   const [editingCategory, setEditingCategory] = useState(null);
   const [deleteCategoryModal, setDeleteCategoryModal] = useState(null);
+  const [orderFilter, setOrderFilter] = useState('all');
+  const [orderSearch, setOrderSearch] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [productSearch, setProductSearch] = useState('');
+  const [productStatusFilter, setProductStatusFilter] = useState('all');
+  const [payoutFilter, setPayoutFilter] = useState('all');
+  const [sellerFilter, setSellerFilter] = useState('all');
+  const [viewingSeller, setViewingSeller] = useState(null);
 
   const [stats, setStats] = useState({
     totalProducts: 0,
@@ -48,7 +59,7 @@ export default function AdminDashboard() {
   async function loadAll() {
     setDataLoading(true);
 
-    const [sellersRes, productsRes, catsRes, ordersRes, allProductsRes, approvedSellersRes, payoutsRes, walletsRes, allSellersRes, customersRes] = await Promise.all([
+    const [sellersRes, productsRes, catsRes, ordersRes, allProductsRes, approvedSellersRes, payoutsRes, walletsRes, allSellersRes, customersRes, orderItemsRes] = await Promise.all([
       supabase.from('sellers').select('*').eq('status', 'pending'),
       supabase.from('products').select('*').eq('approval_status', 'pending').or('is_deleted.is.null,is_deleted.eq.false'),
       supabase.from('categories').select('*').order('name'),
@@ -59,6 +70,7 @@ export default function AdminDashboard() {
       supabase.from('wallets').select('*'),
       supabase.from('sellers').select('*').order('created_at', { ascending: false }),
       supabase.from('users').select('*').eq('role', 'customer').order('created_at', { ascending: false }),
+      supabase.from('order_items').select('*'),
     ]);
 
     setPendingSellers(sellersRes.data || []);
@@ -69,6 +81,7 @@ export default function AdminDashboard() {
     setWallets(walletsRes.data || []);
     setAllSellers(allSellersRes.data || []);
     setAllCustomers(customersRes?.data || []);
+    setAllOrderItems(orderItemsRes.data || []);
 
     const { data: allProds } = await supabase
       .from('products')
@@ -209,7 +222,14 @@ export default function AdminDashboard() {
     loadAll();
     alert('Product updated!');
   }
-
+  async function toggleFeatured(product) {
+    const newValue = !product.is_featured;
+    await supabase
+      .from('products')
+      .update({ is_featured: newValue })
+      .eq('id', product.id);
+    loadAll();
+  }
   async function softDeleteProduct(id) {
     if (!confirm('Hide this product? (You can restore it later from the database)')) return;
     await supabase.from('products').update({ is_deleted: true, is_active: false }).eq('id', id);
@@ -329,9 +349,41 @@ export default function AdminDashboard() {
     alert('Products moved and category deleted!');
   }
 
-  async function updateOrderStatus(orderId, newStatus) {
+   async function updateOrderStatus(orderId, newStatus) {
     if (!confirm(`Mark this order as "${newStatus}"?`)) return;
+
     await supabase.from('orders').update({ order_status: newStatus }).eq('id', orderId);
+
+    if (newStatus === 'delivered') {
+      await supabase
+        .from('order_items')
+        .update({ seller_status: 'delivered' })
+        .eq('order_id', orderId);
+
+      const { data: orderData } = await supabase
+        .from('orders')
+        .select('customer_email, customer_name, consolidation_point, selected_delivery_point, total')
+        .eq('id', orderId)
+        .single();
+
+      if (orderData?.customer_email) {
+        const deliveryPoint = orderData.consolidation_point || orderData.selected_delivery_point || 'HTU ENTRANCE';
+
+        fetch('/api/send-order-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'order_ready',
+            customerEmail: orderData.customer_email,
+            customerName: orderData.customer_name,
+            orderId: orderId.slice(0, 8),
+            deliveryPoint: deliveryPoint,
+            total: Number(orderData.total).toFixed(2),
+          }),
+        }).catch(err => console.error('Order ready email failed:', err));
+      }
+    }
+
     loadAll();
   }
 
@@ -404,6 +456,42 @@ export default function AdminDashboard() {
     alert('Payout marked as paid!');
   }
 
+  async function paySellerDirect(seller, amount) {
+    if (!confirm(`Mark GHS ${amount.toFixed(2)} as PAID to ${seller.full_name}? Make sure you've sent the MoMo first.`)) return;
+
+    const { error } = await supabase.from('payouts').insert({
+      seller_id: seller.user_id,
+      amount: amount,
+      status: 'paid',
+      paid_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      alert('Error: ' + error.message);
+      return;
+    }
+
+    const { data: wallet } = await supabase
+      .from('wallets')
+      .select('*')
+      .eq('seller_id', seller.user_id)
+      .maybeSingle();
+
+    if (wallet) {
+      await supabase
+        .from('wallets')
+        .update({
+          available_balance: Math.max(0, Number(wallet.available_balance || 0) - amount),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('seller_id', seller.user_id);
+    }
+
+    setViewingSeller(null);
+    loadAll();
+    alert('✅ Payment recorded!');
+  }
+
   function findSellerName(sellerId) {
     const s = approvedSellers.find(x => x.user_id === sellerId);
     return s ? s.full_name : 'Unknown Seller';
@@ -439,6 +527,43 @@ export default function AdminDashboard() {
     );
   }
 
+  function calcSellerMoney(seller) {
+    const sellerItems = allOrderItems.filter(i => i.seller_id === seller.user_id && i.seller_status === 'delivered');
+
+    const paystackItems = sellerItems.filter(i => i.payment_method === 'paystack');
+    const podItems = sellerItems.filter(i => i.payment_method === 'pay_on_delivery');
+
+    const paystackSales = paystackItems.reduce((s, i) => s + Number(i.subtotal || 0), 0);
+    const podSales = podItems.reduce((s, i) => s + Number(i.subtotal || 0), 0);
+    const totalSales = paystackSales + podSales;
+
+    const paystackComm = paystackSales * 0.05;
+    const podComm = podSales * 0.05;
+    const totalComm = paystackComm + podComm;
+
+    const totalNet = totalSales - totalComm;
+
+    const sellerPayouts = payouts.filter(p => p.seller_id === seller.user_id && p.status === 'paid');
+    const paidSoFar = sellerPayouts.reduce((s, p) => s + Number(p.amount || 0), 0);
+
+    const owedNow = Math.max(0, totalNet - paidSoFar);
+
+    return {
+      paystackSales, podSales, totalSales,
+      paystackComm, podComm, totalComm,
+      totalNet, paidSoFar, owedNow,
+      paystackCount: paystackItems.length,
+      podCount: podItems.length,
+    };
+  }
+
+  const sellersMoneyData = allSellers
+    .filter(s => s.status === 'approved')
+    .map(s => ({ seller: s, money: calcSellerMoney(s) }))
+    .sort((a, b) => b.money.owedNow - a.money.owedNow);
+
+  const totalOwedAll = sellersMoneyData.reduce((s, x) => s + x.money.owedNow, 0);
+
   const pendingOrdersCount = orders.filter(o => o.order_status === 'placed').length;
   const pendingSellersCount = pendingSellers.length;
   const pendingProductsCount = pendingProducts.length;
@@ -449,624 +574,813 @@ export default function AdminDashboard() {
     return custOrders.some(o => ['placed', 'processing', 'dispatched', 'delivered'].includes(o.order_status));
   }).length;
 
+  const filteredOrders = orders.filter(o => {
+    if (orderFilter !== 'all' && o.order_status !== orderFilter) return false;
+    if (orderSearch.trim()) {
+      const q = orderSearch.toLowerCase();
+      return (
+        (o.customer_name || '').toLowerCase().includes(q) ||
+        (o.customer_phone || '').toLowerCase().includes(q) ||
+        o.id.toLowerCase().includes(q) ||
+        (o.items || []).some(i => (i.product_name || '').toLowerCase().includes(q))
+      );
+    }
+    return true;
+  });
+
+  const filteredCustomers = allCustomers.filter(cust => {
+    const hasOrders = orders.some(o => o.customer_id === cust.id);
+    if (!hasOrders) return false;
+    if (!customerSearch.trim()) return true;
+    const q = customerSearch.toLowerCase();
+    return (
+      (cust.full_name || '').toLowerCase().includes(q) ||
+      (cust.phone || '').toLowerCase().includes(q) ||
+      (cust.email || '').toLowerCase().includes(q)
+    );
+  });
+
+  const filteredProducts = allProducts.filter(p => {
+    if (productStatusFilter === 'approved' && p.approval_status !== 'approved') return false;
+    if (productStatusFilter === 'pending' && p.approval_status !== 'pending') return false;
+    if (productStatusFilter === 'rejected' && p.approval_status !== 'rejected') return false;
+    if (productStatusFilter === 'hidden' && p.is_active) return false;
+    if (!productSearch.trim()) return true;
+    const q = productSearch.toLowerCase();
+    return (
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.seller_name || '').toLowerCase().includes(q) ||
+      (p.category_name || '').toLowerCase().includes(q)
+    );
+  });
+
+  const filteredSellers = allSellers.filter(s => {
+    if (sellerFilter !== 'all' && s.status !== sellerFilter) return false;
+    return true;
+  });
+
+  const filteredPayouts = payouts.filter(p => {
+    if (payoutFilter !== 'all' && p.status !== payoutFilter) return false;
+    return true;
+  });
+
+  const sidebarMenu = [
+    { id: 'overview', icon: '📊', label: 'OVERVIEW', badge: 0 },
+    { id: 'sellers-money', icon: '💰', label: 'SELLERS MONEY', badge: 0 },
+    { id: 'orders', icon: '📦', label: 'ORDERS', badge: pendingOrdersCount },
+    { id: 'customers', icon: '👤', label: 'CUSTOMERS', badge: customersWithAction },
+    { id: 'sellers', icon: '👥', label: 'PENDING SELLERS', badge: pendingSellersCount },
+    { id: 'products', icon: '⏳', label: 'PENDING PRODUCTS', badge: pendingProductsCount },
+    { id: 'all-sellers', icon: '👥', label: 'ALL SELLERS', badge: 0 },
+    { id: 'all-products', icon: '📦', label: 'ALL PRODUCTS', badge: 0 },
+    { id: 'add-product', icon: '➕', label: 'ADD PRODUCT', badge: 0 },
+    { id: 'payouts', icon: '💰', label: 'PAYOUTS', badge: pendingPayoutsCount },
+    { id: 'categories', icon: '📁', label: 'CATEGORIES', badge: 0 },
+  ];
+
+  function handleTabClick(id) {
+    setTab(id);
+    setSidebarOpen(false);
+    setUnifiedSearch('');
+    setOrderSearch('');
+    setCustomerSearch('');
+    setProductSearch('');
+  }
+
+  function handleUnifiedSearch(value) {
+    setUnifiedSearch(value);
+    if (tab === 'orders') setOrderSearch(value);
+    else if (tab === 'customers') setCustomerSearch(value);
+    else if (tab === 'all-products') setProductSearch(value);
+  }
+
+  const searchPlaceholder = (() => {
+    switch (tab) {
+      case 'orders': return '🔍 SEARCH IN ORDERS...';
+      case 'customers': return '🔍 SEARCH IN CUSTOMERS...';
+      case 'all-products': return '🔍 SEARCH IN ALL PRODUCTS...';
+      case 'all-sellers': return '🔍 SEARCH IN ALL SELLERS...';
+      case 'sellers-money': return '🔍 SEARCH IN SELLERS MONEY...';
+      case 'payouts': return '🔍 SEARCH IN PAYOUTS...';
+      default: return '🔍 SEARCH...';
+    }
+  })();
+
   function Badge({ count }) {
     if (!count) return null;
     return (
-      <span className="ml-1.5 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+      <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
         {count > 9 ? '9+' : count}
       </span>
     );
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-      <h1 className="text-xl sm:text-2xl font-bold text-indigo-900 mb-4 sm:mb-6">Admin Dashboard</h1>
-
-      <div className="flex flex-wrap gap-2 mb-4 sm:mb-6">
-        {[
-          { id: 'overview', label: '📊 Overview', badge: 0 },
-          { id: 'orders', label: '📦 Orders', badge: pendingOrdersCount },
-          { id: 'customers', label: '👤 Customers', badge: customersWithAction },
-          { id: 'sellers', label: '👥 Pending Sellers', badge: pendingSellersCount },
-          { id: 'products', label: '⏳ Pending Products', badge: pendingProductsCount },
-          { id: 'all-sellers', label: '👥 All Sellers', badge: 0 },
-          { id: 'all-products', label: '📦 All Products', badge: 0 },
-          { id: 'add-product', label: '➕ Add Product', badge: 0 },
-          { id: 'payouts', label: '💰 Payouts', badge: pendingPayoutsCount },
-          { id: 'categories', label: '📁 Categories', badge: 0 },
-        ].map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold inline-flex items-center ${tab === t.id ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700'}`}
-          >
-            {t.label}
-            <Badge count={t.badge} />
-          </button>
-        ))}
-      </div>
-
-      {tab === 'overview' && (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
-            <div className="bg-white p-3 sm:p-4 rounded-xl shadow">
-              <p className="text-[10px] sm:text-xs text-gray-500">Products</p>
-              <p className="text-lg sm:text-2xl font-bold text-indigo-600">{stats.totalProducts}</p>
-            </div>
-            <div className="bg-white p-3 sm:p-4 rounded-xl shadow">
-              <p className="text-[10px] sm:text-xs text-gray-500">Orders</p>
-              <p className="text-lg sm:text-2xl font-bold text-green-600">{stats.totalOrders}</p>
-            </div>
-            <div className="bg-white p-3 sm:p-4 rounded-xl shadow">
-              <p className="text-[10px] sm:text-xs text-gray-500">Pending Orders</p>
-              <p className="text-lg sm:text-2xl font-bold text-amber-600">{stats.pendingOrders}</p>
-            </div>
-            <div className="bg-white p-3 sm:p-4 rounded-xl shadow">
-              <p className="text-[10px] sm:text-xs text-gray-500">Revenue</p>
-              <p className="text-lg sm:text-2xl font-bold text-blue-600">GHS {stats.totalRevenue.toFixed(2)}</p>
-            </div>
-          </div>
-          <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-xl p-4 sm:p-6 shadow-lg">
-            <p className="text-xs sm:text-sm opacity-90">Total B STORE Commission Earned (5%)</p>
-            <p className="text-2xl sm:text-4xl font-bold mt-2">
-              GHS {wallets.reduce((s, w) => s + Number(w.total_commission || 0), 0).toFixed(2)}
-            </p>
-          </div>
-        </>
+    <div className="min-h-screen bg-gray-100 flex">
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
       )}
 
-      {tab === 'customers' && (
-        <div className="space-y-3">
-          {dataLoading ? (
-            <p className="text-gray-500 text-sm">Loading customers...</p>
-          ) : allCustomers.filter(c => orders.some(o => o.customer_id === c.id)).length === 0 ? (
-            <p className="text-gray-500 text-sm">No customers with orders yet.</p>
-          ) : (
-            allCustomers
-              .filter(cust => orders.some(o => o.customer_id === cust.id))
-              .map(cust => {
-                const custOrders = orders.filter(o => o.customer_id === cust.id);
-                const newCount = custOrders.filter(o => o.order_status === 'placed').length;
-                const inProgressCount = custOrders.filter(o => ['processing', 'dispatched'].includes(o.order_status)).length;
-                const readyCount = custOrders.filter(o => o.order_status === 'delivered').length;
+      <aside className={`fixed md:sticky top-0 left-0 z-50 md:z-0 h-screen w-64 bg-indigo-900 text-white flex flex-col transition-transform duration-300 md:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-4 border-b border-indigo-800 flex justify-between items-center">
+          <h2 className="font-bold text-lg uppercase">ADMIN</h2>
+          <button onClick={() => setSidebarOpen(false)} className="md:hidden text-2xl leading-none">×</button>
+        </div>
 
-                return (
-                  <Link
-                    key={cust.id}
-                    to={`/admin/customer/${cust.id}`}
-                    className="block bg-white border rounded-xl p-4 hover:shadow-lg transition"
-                  >
-                    <div className="flex flex-wrap justify-between gap-3">
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">
-                          👤
+        <div className="flex-1 overflow-y-auto py-2">
+          {sidebarMenu.map(item => (
+            <button
+              key={item.id}
+              onClick={() => handleTabClick(item.id)}
+              className={`w-full text-left px-4 py-3 flex items-center gap-3 text-sm font-semibold transition ${
+                tab === item.id
+                  ? 'bg-indigo-700 border-l-4 border-amber-400'
+                  : 'hover:bg-indigo-800'
+              }`}
+            >
+              <span className="text-lg">{item.icon}</span>
+              <span className="flex-1 uppercase">{item.label}</span>
+              <Badge count={item.badge} />
+            </button>
+          ))}
+        </div>
+
+        <div className="p-4 border-t border-indigo-800 text-xs text-indigo-300">
+          B STORE Admin Panel
+        </div>
+      </aside>
+
+      <div className="flex-1 min-w-0">
+        <div className="md:hidden bg-indigo-900 text-white px-4 py-3 flex items-center justify-between sticky top-0 z-30">
+          <button onClick={() => setSidebarOpen(true)} className="text-2xl leading-none">☰</button>
+          <h1 className="font-bold text-sm uppercase">ADMIN DASHBOARD</h1>
+          <div className="w-6"></div>
+        </div>
+
+        <div className="p-3 sm:p-6">
+          <h1 className="hidden md:block text-2xl font-bold text-indigo-900 mb-6 uppercase">ADMIN DASHBOARD</h1>
+
+          <div className="mb-4">
+            <input
+              type="text"
+              value={unifiedSearch}
+              onChange={(e) => handleUnifiedSearch(e.target.value)}
+              placeholder={searchPlaceholder}
+              className="w-full px-4 py-3 border-2 border-indigo-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 uppercase"
+            />
+          </div>
+
+          {tab === 'overview' && (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
+                <div className="bg-gradient-to-br from-indigo-50 to-white p-4 rounded-xl shadow">
+                  <p className="text-xs text-gray-500 uppercase">Products</p>
+                  <p className="text-2xl font-bold text-indigo-600">{stats.totalProducts}</p>
+                </div>
+                <div className="bg-gradient-to-br from-green-50 to-white p-4 rounded-xl shadow">
+                  <p className="text-xs text-gray-500 uppercase">Orders</p>
+                  <p className="text-2xl font-bold text-green-600">{stats.totalOrders}</p>
+                </div>
+                <div className="bg-gradient-to-br from-amber-50 to-white p-4 rounded-xl shadow">
+                  <p className="text-xs text-gray-500 uppercase">Pending Orders</p>
+                  <p className="text-2xl font-bold text-amber-600">{stats.pendingOrders}</p>
+                </div>
+                <div className="bg-gradient-to-br from-blue-50 to-white p-4 rounded-xl shadow">
+                  <p className="text-xs text-gray-500 uppercase">Revenue</p>
+                  <p className="text-2xl font-bold text-blue-600">GHS {stats.totalRevenue.toFixed(2)}</p>
+                </div>
+              </div>
+              <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-xl p-6 shadow-lg">
+                <p className="text-sm opacity-90 uppercase">Total B STORE Commission Earned (5%)</p>
+                <p className="text-4xl font-bold mt-2">
+                  GHS {wallets.reduce((s, w) => s + Number(w.total_commission || 0), 0).toFixed(2)}
+                </p>
+              </div>
+            </>
+          )}
+
+          {tab === 'sellers-money' && (
+            <div className="space-y-4">
+              <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-xl p-4 sm:p-6 shadow-lg">
+                <p className="text-xs sm:text-sm opacity-90 uppercase">TOTAL OWED TO ALL SELLERS</p>
+                <p className="text-2xl sm:text-4xl font-bold mt-2">GHS {totalOwedAll.toFixed(2)}</p>
+              </div>
+
+              <div className="bg-white rounded-xl shadow overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-indigo-900 text-white uppercase text-xs">
+                      <tr>
+                        <th className="px-4 py-3 text-left">SELLER</th>
+                        <th className="px-4 py-3 text-right">PAYSTACK</th>
+                        <th className="px-4 py-3 text-right">POD</th>
+                        <th className="px-4 py-3 text-right">LIFETIME NET</th>
+                        <th className="px-4 py-3 text-right">PAID</th>
+                        <th className="px-4 py-3 text-right">OWED NOW</th>
+                        <th className="px-4 py-3 text-center">ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {sellersMoneyData.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-8 text-center text-gray-500">No approved sellers yet.</td>
+                        </tr>
+                      ) : (
+                        sellersMoneyData
+                          .filter(({ seller }) => !unifiedSearch.trim() || (seller.full_name || '').toLowerCase().includes(unifiedSearch.toLowerCase()))
+                          .map(({ seller, money }) => (
+                          <tr key={seller.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3">
+                              <p className="font-bold text-gray-800">{seller.full_name}</p>
+                              <p className="text-xs text-gray-500">{seller.phone}</p>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <p className="font-semibold text-indigo-600">GHS {money.paystackSales.toFixed(2)}</p>
+                              <p className="text-[10px] text-gray-500">({money.paystackCount} items)</p>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <p className="font-semibold text-amber-600">GHS {money.podSales.toFixed(2)}</p>
+                              <p className="text-[10px] text-gray-500">({money.podCount} items)</p>
+                            </td>
+                            <td className="px-4 py-3 text-right font-bold text-green-700">GHS {money.totalNet.toFixed(2)}</td>
+                            <td className="px-4 py-3 text-right text-gray-500">GHS {money.paidSoFar.toFixed(2)}</td>
+                            <td className="px-4 py-3 text-right">
+                              <span className={`font-bold ${money.owedNow > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                                GHS {money.owedNow.toFixed(2)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <button onClick={() => setViewingSeller({ seller, money })} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">
+                                VIEW
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {viewingSeller && (
+            <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-800 uppercase">👤 {viewingSeller.seller.full_name}</h2>
+                    <p className="text-xs text-gray-500">📞 {viewingSeller.seller.phone}</p>
+                  </div>
+                  <button onClick={() => setViewingSeller(null)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+                </div>
+
+                <div className="bg-gray-50 rounded-xl p-4 mb-4">
+                  <p className="text-xs font-bold text-gray-700 uppercase mb-3">PAYMENT BREAKDOWN</p>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-gray-500 border-b">
+                        <th className="text-left pb-2">TYPE</th>
+                        <th className="text-right pb-2">SALES</th>
+                        <th className="text-right pb-2">COMM 5%</th>
+                        <th className="text-right pb-2">NET</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="border-b">
+                        <td className="py-2">💳 PAYSTACK</td>
+                        <td className="text-right">GHS {viewingSeller.money.paystackSales.toFixed(2)}</td>
+                        <td className="text-right text-red-600">-GHS {viewingSeller.money.paystackComm.toFixed(2)}</td>
+                        <td className="text-right font-semibold">GHS {(viewingSeller.money.paystackSales - viewingSeller.money.paystackComm).toFixed(2)}</td>
+                      </tr>
+                      <tr className="border-b">
+                        <td className="py-2">💵 PAY ON DELIVERY</td>
+                        <td className="text-right">GHS {viewingSeller.money.podSales.toFixed(2)}</td>
+                        <td className="text-right text-red-600">-GHS {viewingSeller.money.podComm.toFixed(2)}</td>
+                        <td className="text-right font-semibold">GHS {(viewingSeller.money.podSales - viewingSeller.money.podComm).toFixed(2)}</td>
+                      </tr>
+                      <tr className="border-t-2 font-bold">
+                        <td className="py-2">TOTAL</td>
+                        <td className="text-right">GHS {viewingSeller.money.totalSales.toFixed(2)}</td>
+                        <td className="text-right text-red-600">-GHS {viewingSeller.money.totalComm.toFixed(2)}</td>
+                        <td className="text-right text-green-700">GHS {viewingSeller.money.totalNet.toFixed(2)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="bg-white rounded-xl p-4 mb-4 border-2 border-gray-200">
+                  <div className="flex justify-between items-center mb-2">
+                    <p className="text-xs text-gray-500 uppercase">ALREADY PAID</p>
+                    <p className="font-bold text-gray-700">GHS {viewingSeller.money.paidSoFar.toFixed(2)}</p>
+                  </div>
+                  <div className="flex justify-between items-center pt-2 border-t">
+                    <p className="text-sm font-bold text-gray-800 uppercase">OWED NOW</p>
+                    <p className={`text-xl font-bold ${viewingSeller.money.owedNow > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                      GHS {viewingSeller.money.owedNow.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+
+                {viewingSeller.money.owedNow > 0 && (
+                  <button onClick={() => paySellerDirect(viewingSeller.seller, viewingSeller.money.owedNow)} className="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-3 rounded-lg text-sm mb-2 uppercase">
+                    💸 SEND GHS {viewingSeller.money.owedNow.toFixed(2)} & MARK PAID
+                  </button>
+                )}
+
+                <button onClick={() => setViewingSeller(null)} className="w-full bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2 rounded-lg text-sm uppercase">
+                  CLOSE
+                </button>
+              </div>
+            </div>
+          )}
+
+          {tab === 'orders' && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: 'all', label: 'ALL' },
+                  { id: 'placed', label: 'PLACED' },
+                  { id: 'processing', label: 'PROCESSING' },
+                  { id: 'dispatched', label: 'DISPATCHED' },
+                  { id: 'delivered', label: 'DELIVERED' },
+                  { id: 'completed', label: 'COMPLETED' },
+                  { id: 'cancelled', label: 'CANCELLED' },
+                ].map(f => {
+                  const count = f.id === 'all' ? orders.length : orders.filter(o => o.order_status === f.id).length;
+                  return (
+                    <button key={f.id} onClick={() => setOrderFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${orderFilter === f.id ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>
+                      {f.label} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+
+              {filteredOrders.length === 0 ? (
+                <p className="text-gray-500 text-sm py-4">No orders in this filter.</p>
+              ) : (
+                filteredOrders.map(order => (
+                  <div key={order.id} className="bg-white border rounded-xl p-3 sm:p-4">
+                    <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+                      <div>
+                        <p className="text-xs text-gray-500">Order #{order.id.slice(0, 8)}...</p>
+                        <p className="text-xs text-gray-400">{new Date(order.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded font-semibold ${statusColor(order.order_status)}`}>{order.order_status.toUpperCase()}</span>
+                    </div>
+                    <div className="text-sm text-gray-700 mb-3 uppercase"><strong>{order.customer_name}</strong> — {order.customer_phone}</div>
+                    {order.is_multi_seller && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs mb-3">
+                        <p className="font-semibold text-amber-800 uppercase">📦 MULTI-SELLER → {order.consolidation_point}</p>
+                      </div>
+                    )}
+                    {!order.is_multi_seller && order.selected_delivery_point && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-xs mb-3">
+                        <p className="font-semibold text-blue-800 uppercase">📍 {order.selected_delivery_point}</p>
+                      </div>
+                    )}
+                    <div className="space-y-2 mb-3">
+                      {order.items.map(item => (
+                        <div key={item.id} className="flex items-center gap-3 text-sm border-l-4 border-indigo-300 pl-3 flex-wrap">
+                          <div className="w-10 h-10 bg-gray-50 rounded border flex items-center justify-center p-0.5 flex-shrink-0">
+                            <img src={item.product_image || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
+                          </div>
+                          <div className="flex-1 min-w-[140px]">
+                            <p className="font-medium text-gray-800 text-xs sm:text-sm">{item.product_name}</p>
+                            <p className="text-[10px] sm:text-xs text-gray-500">{item.seller_name} • ×{item.quantity} • GHS {Number(item.subtotal).toFixed(2)}</p>
+                          </div>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColor(item.seller_status)}`}>{item.seller_status.toUpperCase()}</span>
+                          <button onClick={() => notifySeller(item, order)} className="bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded text-[10px] font-semibold">📲</button>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-bold text-gray-800 truncate">{cust.full_name || 'Customer'}</p>
-                          <p className="text-xs text-gray-600">{cust.phone || 'No phone'}</p>
-                          <p className="text-xs text-gray-400 truncate">{cust.email}</p>
+                      ))}
+                    </div>
+                    <div className="border-t pt-3 flex flex-wrap justify-between items-center gap-2">
+                      <div className="text-xs text-gray-500 uppercase">💳 {order.payment_method.replace('_', ' ')}</div>
+                      <div className="font-bold text-indigo-600 text-sm">GHS {Number(order.total).toFixed(2)}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
+                      {order.order_status === 'placed' && <button onClick={() => updateOrderStatus(order.id, 'processing')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">PROCESSING</button>}
+                      {order.order_status === 'processing' && <button onClick={() => updateOrderStatus(order.id, 'dispatched')} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">DISPATCHED</button>}
+                      {order.order_status === 'dispatched' && <button onClick={() => updateOrderStatus(order.id, 'delivered')} className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">DELIVERED</button>}
+                      {order.order_status === 'delivered' && <button onClick={() => updateOrderStatus(order.id, 'completed')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">COMPLETED</button>}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {tab === 'customers' && (
+            <div className="space-y-3">
+              {dataLoading ? (
+                <p className="text-gray-500 text-sm">Loading customers...</p>
+              ) : filteredCustomers.length === 0 ? (
+                <p className="text-gray-500 text-sm">No customers matching.</p>
+              ) : (
+                filteredCustomers.map(cust => {
+                  const custOrders = orders.filter(o => o.customer_id === cust.id);
+                  const newCount = custOrders.filter(o => o.order_status === 'placed').length;
+                  const inProgressCount = custOrders.filter(o => ['processing', 'dispatched'].includes(o.order_status)).length;
+                  const readyCount = custOrders.filter(o => o.order_status === 'delivered').length;
+                  return (
+                    <Link key={cust.id} to={`/admin/customer/${cust.id}`} className="block bg-white border rounded-xl p-4 hover:shadow-lg transition">
+                      <div className="flex flex-wrap justify-between gap-3">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-xl flex-shrink-0">👤</div>
+                          <div className="min-w-0">
+                            <p className="font-bold text-gray-800 truncate uppercase">{cust.full_name || 'CUSTOMER'}</p>
+                            <p className="text-xs text-gray-600">{cust.phone || 'No phone'}</p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2 self-center">
+                          {newCount > 0 && <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-1 rounded">🔴 {newCount} NEW</span>}
+                          {inProgressCount > 0 && <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded">🟠 {inProgressCount} IN PROGRESS</span>}
+                          {readyCount > 0 && <span className="bg-purple-100 text-purple-800 text-xs font-bold px-2 py-1 rounded">🟣 {readyCount} READY</span>}
+                          {newCount === 0 && inProgressCount === 0 && readyCount === 0 && <span className="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded">✅ ALL DONE</span>}
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-2 self-center">
-                        {newCount > 0 && (
-                          <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-1 rounded">
-                            🔴 {newCount} new
-                          </span>
-                        )}
-                        {inProgressCount > 0 && (
-                          <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded">
-                            🟠 {inProgressCount} in progress
-                          </span>
-                        )}
-                        {readyCount > 0 && (
-                          <span className="bg-purple-100 text-purple-800 text-xs font-bold px-2 py-1 rounded">
-                            🟣 {readyCount} ready
-                          </span>
-                        )}
-                        {newCount === 0 && inProgressCount === 0 && readyCount === 0 && (
-                          <span className="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded">
-                            ✅ All done
-                          </span>
-                        )}
-                        <span className="text-xs text-gray-500 self-center">
-                          {custOrders.length} order{custOrders.length !== 1 ? 's' : ''}
-                        </span>
+                    </Link>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {tab === 'all-sellers' && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: 'all', label: 'ALL' },
+                  { id: 'approved', label: 'APPROVED' },
+                  { id: 'pending', label: 'PENDING' },
+                  { id: 'suspended', label: 'SUSPENDED' },
+                  { id: 'rejected', label: 'REJECTED' },
+                ].map(f => {
+                  const count = f.id === 'all' ? allSellers.length : allSellers.filter(s => s.status === f.id).length;
+                  return (
+                    <button key={f.id} onClick={() => setSellerFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sellerFilter === f.id ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>
+                      {f.label} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+              {filteredSellers.length === 0 ? (
+                <p className="text-gray-500 text-sm">No sellers in this filter.</p>
+              ) : (
+                filteredSellers.map(s => (
+                  <div key={s.id} className="bg-white border rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
+                    <div className="text-sm">
+                      <p className="font-bold text-gray-800 uppercase">{s.full_name}</p>
+                      <p className="text-gray-600 text-xs">📞 {s.phone} | 💬 {s.whatsapp}</p>
+                      <p className="text-gray-600 text-xs">📍 {s.region} — {s.address}</p>
+                      <span className={`inline-block mt-2 text-xs px-2 py-0.5 rounded font-semibold ${sellerStatusColor(s.status)}`}>{s.status.toUpperCase()}</span>
+                    </div>
+                    <div className="flex gap-2 self-center flex-wrap">
+                      {s.status === 'approved' && (
+                        <>
+                          <Link to={`/admin/enter-seller/${s.user_id}`} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">🔓 ENTER</Link>
+                          <button onClick={() => blockSeller(s)} className="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">🚫 BLOCK</button>
+                        </>
+                      )}
+                      {s.status === 'suspended' && <button onClick={() => unblockSeller(s)} className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✅ UNBLOCK</button>}
+                      {s.status === 'pending' && (
+                        <>
+                          <button onClick={() => approveSeller(s)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✅ APPROVE</button>
+                          <button onClick={() => rejectSeller(s)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">❌ REJECT</button>
+                        </>
+                      )}
+                      {s.status === 'rejected' && <button onClick={() => approveSeller(s)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✅ RE-APPROVE</button>}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {tab === 'all-products' && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: 'all', label: 'ALL' },
+                  { id: 'approved', label: 'APPROVED' },
+                  { id: 'pending', label: 'PENDING' },
+                  { id: 'rejected', label: 'REJECTED' },
+                  { id: 'hidden', label: 'HIDDEN' },
+                ].map(f => {
+                  const count = f.id === 'all' ? allProducts.length : f.id === 'hidden' ? allProducts.filter(p => !p.is_active).length : allProducts.filter(p => p.approval_status === f.id).length;
+                  return (
+                    <button key={f.id} onClick={() => setProductStatusFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${productStatusFilter === f.id ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>
+                      {f.label} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+              {filteredProducts.length === 0 ? (
+                <p className="text-gray-500 text-sm">No matching products.</p>
+              ) : (
+                filteredProducts.map(p => (
+                  <div key={p.id} className="bg-white border rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
+                    <div className="flex gap-3 items-center flex-1 min-w-0">
+                      <div className="w-14 h-14 bg-gray-50 rounded-lg border flex items-center justify-center p-1 flex-shrink-0">
+                        <img src={p.image_url || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
+                      </div>
+                      <div className="text-sm min-w-0">
+                        <p className="font-bold text-gray-800 truncate">{p.name}</p>
+                        <p className="text-gray-600 text-xs">{p.category_name} • GHS {Number(p.price).toFixed(2)} • Stock: {p.stock}</p>
+                        <p className="text-xs text-gray-500">Seller: {p.seller_name}</p>
                       </div>
                     </div>
-                  </Link>
-                );
-              })
-          )}
-        </div>
-      )}
-
-      {tab === 'all-sellers' && (
-        <div className="space-y-3">
-          {allSellers.length === 0 ? (
-            <p className="text-gray-500 text-sm">No sellers yet.</p>
-          ) : (
-            allSellers.map(s => (
-              <div key={s.id} className="bg-white border rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
-                <div className="text-sm">
-                  <p className="font-bold text-gray-800">{s.full_name}</p>
-                  <p className="text-gray-600 text-xs">📞 {s.phone} | 💬 {s.whatsapp}</p>
-                  <p className="text-gray-600 text-xs">📍 {s.region} — {s.address}</p>
-                  <p className="text-gray-500 text-xs mt-1">Delivery: {s.location_1}{s.location_2 ? ` / ${s.location_2}` : ''}</p>
-                  <span className={`inline-block mt-2 text-xs px-2 py-0.5 rounded font-semibold ${sellerStatusColor(s.status)}`}>
-                    {s.status.toUpperCase()}
-                  </span>
-                </div>
-                <div className="flex gap-2 self-center flex-wrap">
-                  {s.status === 'pending' && (
-                    <>
-                      <button onClick={() => approveSeller(s)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold">✅ Approve</button>
-                      <button onClick={() => rejectSeller(s)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold">❌ Reject</button>
-                    </>
-                  )}
-                  {s.status === 'approved' && (
-  <Link to={`/admin/enter-seller/${s.user_id}`} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded text-xs font-semibold">
-    🔓 Enter Dashboard
-  </Link>
-)}
-                  {s.status === 'approved' && (
-                    <button onClick={() => blockSeller(s)} className="bg-gray-800 hover:bg-gray-900 text-white px-3 py-1.5 rounded text-xs font-semibold">🚫 Block</button>
-                  )}
-                  {s.status === 'suspended' && (
-                    <button onClick={() => unblockSeller(s)} className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-semibold">✅ Unblock</button>
-                  )}
-                  {s.status === 'rejected' && (
-                    <button onClick={() => approveSeller(s)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold">✅ Re-Approve</button>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {tab === 'all-products' && (
-        <div className="space-y-3">
-          {allProducts.length === 0 ? (
-            <p className="text-gray-500 text-sm">No products yet.</p>
-          ) : (
-            allProducts.map(p => (
-              <div key={p.id} className="bg-white border rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
-                <div className="flex gap-3 items-center flex-1 min-w-0">
-                  <div className="w-14 h-14 bg-gray-50 rounded-lg border flex items-center justify-center p-1 flex-shrink-0">
-                    <img src={p.image_url || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
+                               <div className="flex gap-2 self-center flex-wrap">
+                      <button
+                        onClick={() => toggleFeatured(p)}
+                        className={`px-3 py-1.5 rounded text-xs font-semibold uppercase ${
+                          p.is_featured
+                            ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                            : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                        }`}
+                      >
+                        {p.is_featured ? '⭐ FEATURED' : '☆ FEATURE'}
+                      </button>
+                      <button onClick={() => setEditingProduct({ ...p })} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✏️ EDIT</button>
+                      <button onClick={() => softDeleteProduct(p.id)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">🗑️ HIDE</button>
+                    </div>
                   </div>
-                  <div className="text-sm min-w-0">
-                    <p className="font-bold text-gray-800 truncate">{p.name}</p>
-                    <p className="text-gray-600 text-xs">{p.category_name} • GHS {Number(p.price).toFixed(2)} • Stock: {p.stock}</p>
-                    <p className="text-xs text-gray-500">Seller: {p.seller_name}</p>
-                    <span className={`inline-block mt-1 text-xs px-2 py-0.5 rounded font-semibold ${
-                      p.approval_status === 'pending' ? 'bg-amber-100 text-amber-800' :
-                      p.approval_status === 'approved' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                    }`}>
-                      {p.approval_status.toUpperCase()}
-                      {!p.is_active && ' • HIDDEN'}
-                    </span>
-                  </div>
-                </div>
-                <div className="flex gap-2 self-center flex-wrap">
-                  <button onClick={() => setEditingProduct({ ...p })} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs font-semibold">✏️ Edit</button>
-                  <button onClick={() => softDeleteProduct(p.id)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold">🗑️ Hide</button>
-                </div>
-              </div>
-            ))
+                ))
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      {editingProduct && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <h2 className="text-lg font-bold mb-4">Edit Product</h2>
-            <form onSubmit={handleSaveEdit} className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-700">Name</label>
-                <input type="text" required value={editingProduct.name}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700">Description</label>
-                <textarea rows={2} value={editingProduct.description || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, description: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
+          {tab === 'add-product' && (
+            <div className="bg-white rounded-xl shadow p-4 sm:p-6 max-w-2xl">
+              <form onSubmit={handleAdminAddProduct} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-700">Category</label>
-                  <select required value={editingProduct.category_name}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, category_name: e.target.value })}
-                    className="w-full mt-1 px-3 py-2 border rounded-lg text-sm">
-                    {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                  <label className="block text-sm font-medium text-gray-700 uppercase">SELL AS</label>
+                  <select value={productForm.seller_id} onChange={(e) => updateProduct('seller_id', e.target.value)} className="w-full mt-1 px-3 py-2 border rounded-lg text-sm">
+                    <option value="STORE">🏪 B STORE (STORE ITSELF)</option>
+                    {approvedSellers.map(s => <option key={s.user_id} value={s.user_id}>👤 {s.full_name}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-700">Price (GHS)</label>
-                  <input type="number" step="0.01" required value={editingProduct.price}
-                    onChange={(e) => setEditingProduct({ ...editingProduct, price: e.target.value })}
-                    className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
+                  <label className="block text-sm font-medium text-gray-700 uppercase">PRODUCT NAME</label>
+                  <input type="text" required value={productForm.name} onChange={(e) => updateProduct('name', e.target.value)} className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 uppercase">DESCRIPTION</label>
+                  <textarea rows={3} value={productForm.description} onChange={(e) => updateProduct('description', e.target.value)} className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 uppercase">CATEGORY</label>
+                    <select required value={productForm.category_name} onChange={(e) => updateProduct('category_name', e.target.value)} className="w-full mt-1 px-3 py-2 border rounded-lg text-sm">
+                      <option value="">SELECT...</option>
+                      {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 uppercase">PRICE (GHS)</label>
+                    <input type="number" step="0.01" required value={productForm.price} onChange={(e) => updateProduct('price', e.target.value)} className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 uppercase">STOCK</label>
+                  <input type="number" required value={productForm.stock} onChange={(e) => updateProduct('stock', e.target.value)} className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 uppercase">PRODUCT IMAGE</label>
+                  <div className="space-y-2 mt-1">
+                    <input type="file" accept="image/*" onChange={handleAdminImageUpload} disabled={uploading} className="w-full text-xs" />
+                    {uploading && <p className="text-xs text-amber-600">Uploading...</p>}
+                    <input type="url" value={productForm.image_url} onChange={(e) => updateProduct('image_url', e.target.value)} placeholder="PASTE IMAGE URL" className="w-full px-3 py-2 border rounded-lg text-sm" />
+                  </div>
+                </div>
+                {productForm.image_url && (
+                  <div className="w-32 h-32 bg-gray-50 rounded-lg border flex items-center justify-center p-2">
+                    <img src={productForm.image_url} className="max-w-full max-h-full object-contain" />
+                  </div>
+                )}
+                {productMsg && (
+                  <div className={`text-xs px-3 py-2 rounded-lg ${productMsg.startsWith('✅') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>{productMsg}</div>
+                )}
+                <button type="submit" disabled={uploading} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-lg text-sm uppercase">ADD PRODUCT</button>
+              </form>
+            </div>
+          )}
+
+          {tab === 'payouts' && (
+            <div className="space-y-6">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: 'all', label: 'ALL' },
+                  { id: 'pending', label: 'PENDING' },
+                  { id: 'approved', label: 'APPROVED' },
+                  { id: 'paid', label: 'PAID' },
+                ].map(f => {
+                  const count = f.id === 'all' ? payouts.length : payouts.filter(p => p.status === f.id).length;
+                  return (
+                    <button key={f.id} onClick={() => setPayoutFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${payoutFilter === f.id ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}>
+                      {f.label} ({count})
+                    </button>
+                  );
+                })}
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700">Stock</label>
-                <input type="number" required value={editingProduct.stock}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, stock: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700">Image URL</label>
-                <input type="url" value={editingProduct.image_url || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, image_url: e.target.value })}
-                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-              </div>
-              {editingProduct.image_url && (
-                <div className="w-24 h-24 bg-gray-50 rounded border flex items-center justify-center p-1">
-                  <img src={editingProduct.image_url} className="max-w-full max-h-full object-contain" />
+
+              {(payoutFilter === 'all' || payoutFilter === 'pending') && (
+                <div>
+                  <h3 className="font-bold text-gray-800 mb-3 uppercase">⏳ PENDING PAYOUT REQUESTS</h3>
+                  {payouts.filter(p => p.status === 'pending').length === 0 ? (
+                    <p className="text-sm text-gray-500">No pending payout requests.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {payouts.filter(p => p.status === 'pending').map(p => (
+                        <div key={p.id} className="bg-white border border-amber-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3 items-center">
+                          <div className="text-sm">
+                            <p className="font-bold text-gray-800 uppercase">{findSellerName(p.seller_id)}</p>
+                            <p className="text-gray-600">GHS {Number(p.amount).toFixed(2)}</p>
+                            <p className="text-xs text-gray-500">{new Date(p.requested_at).toLocaleString('en-GB')}</p>
+                          </div>
+                          <button onClick={() => approvePayout(p)} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✅ APPROVE</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setEditingProduct(null)}
-                  className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2 rounded-lg text-sm">
-                  Cancel
-                </button>
-                <button type="submit"
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 rounded-lg text-sm">
-                  Save
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {editingCategory && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-            <h2 className="text-lg font-bold mb-4">Rename Category</h2>
-            <form onSubmit={saveCategoryEdit} className="space-y-3">
-              <input type="text" required value={editingCategory.name}
-                onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
-                className="w-full px-3 py-2 border rounded-lg text-sm" />
-              <p className="text-xs text-gray-500">All products in this category will be updated too.</p>
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setEditingCategory(null)}
-                  className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2 rounded-lg text-sm">
-                  Cancel
-                </button>
-                <button type="submit"
-                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 rounded-lg text-sm">
-                  Save
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+              {(payoutFilter === 'all' || payoutFilter === 'approved') && (
+                <div>
+                  <h3 className="font-bold text-gray-800 mb-3 uppercase">💳 APPROVED — WAITING TO PAY</h3>
+                  {payouts.filter(p => p.status === 'approved').length === 0 ? (
+                    <p className="text-sm text-gray-500">None waiting.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {payouts.filter(p => p.status === 'approved').map(p => (
+                        <div key={p.id} className="bg-white border border-blue-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3 items-center">
+                          <div className="text-sm">
+                            <p className="font-bold text-gray-800 uppercase">{findSellerName(p.seller_id)}</p>
+                            <p className="text-gray-600">GHS {Number(p.amount).toFixed(2)}</p>
+                          </div>
+                          <button onClick={() => markPayoutPaid(p)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">💸 MARK PAID</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
-      {deleteCategoryModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <h2 className="text-lg font-bold mb-2">⚠️ Category in Use</h2>
-            <p className="text-sm text-gray-600 mb-3">
-              "<strong>{deleteCategoryModal.category.name}</strong>" has {deleteCategoryModal.products.length} product(s):
-            </p>
-            <ul className="list-disc list-inside text-xs text-gray-500 mb-4 max-h-32 overflow-y-auto">
-              {deleteCategoryModal.products.map(p => <li key={p.id}>{p.name}</li>)}
-            </ul>
-            <p className="text-sm font-medium mb-2">Move them to:</p>
-            <select
-              value={deleteCategoryModal.moveTo}
-              onChange={(e) => setDeleteCategoryModal({ ...deleteCategoryModal, moveTo: e.target.value })}
-              className="w-full px-3 py-2 border rounded-lg text-sm mb-4"
-            >
-              <option value="">Choose category...</option>
-              {categories.filter(c => c.id !== deleteCategoryModal.category.id).map(c => (
-                <option key={c.id} value={c.name}>{c.name}</option>
-              ))}
-            </select>
-            <div className="flex gap-2">
-              <button onClick={() => setDeleteCategoryModal(null)}
-                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2 rounded-lg text-sm">
-                Cancel
-              </button>
-              <button onClick={confirmMoveAndDelete}
-                className="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded-lg text-sm">
-                Move & Delete
-              </button>
+              {(payoutFilter === 'all' || payoutFilter === 'paid') && (
+                <div>
+                  <h3 className="font-bold text-gray-800 mb-3 uppercase">✅ PAID PAYOUTS</h3>
+                  {payouts.filter(p => p.status === 'paid').length === 0 ? (
+                    <p className="text-sm text-gray-500">None yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {payouts.filter(p => p.status === 'paid').map(p => (
+                        <div key={p.id} className="bg-green-50 border border-green-200 rounded-xl p-3 flex justify-between items-center text-sm">
+                          <div>
+                            <p className="font-bold uppercase">{findSellerName(p.seller_id)}</p>
+                            <p className="text-xs text-gray-500">{new Date(p.paid_at).toLocaleString('en-GB')}</p>
+                          </div>
+                          <p className="font-bold text-green-700">GHS {Number(p.amount).toFixed(2)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      {tab === 'payouts' && (
-        <div className="space-y-6">
-          <div>
-            <h3 className="font-bold text-gray-800 mb-3">⏳ Pending Payout Requests</h3>
-            {payouts.filter(p => p.status === 'pending').length === 0 ? (
-              <p className="text-sm text-gray-500">No pending payout requests.</p>
-            ) : (
-              <div className="space-y-2">
-                {payouts.filter(p => p.status === 'pending').map(p => (
-                  <div key={p.id} className="bg-white border border-amber-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3 items-center">
+          {tab === 'sellers' && (
+            <div className="space-y-3">
+              {pendingSellers.length === 0 ? (
+                <p className="text-gray-500 text-sm">No pending seller applications.</p>
+              ) : (
+                pendingSellers.map(s => (
+                  <div key={s.id} className="bg-white border border-amber-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
                     <div className="text-sm">
-                      <p className="font-bold text-gray-800">{findSellerName(p.seller_id)}</p>
-                      <p className="text-gray-600">GHS {Number(p.amount).toFixed(2)}</p>
-                      <p className="text-xs text-gray-500">{new Date(p.requested_at).toLocaleString('en-GB')}</p>
+                      <p className="font-bold text-gray-800 uppercase">{s.full_name}</p>
+                      <p className="text-gray-600 text-xs">📞 {s.phone} | 💬 {s.whatsapp}</p>
+                      <p className="text-gray-600 text-xs">📍 {s.region} — {s.address}</p>
                     </div>
-                    <button onClick={() => approvePayout(p)} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs font-semibold">✅ Approve</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div>
-            <h3 className="font-bold text-gray-800 mb-3">💳 Approved — Waiting to Pay</h3>
-            {payouts.filter(p => p.status === 'approved').length === 0 ? (
-              <p className="text-sm text-gray-500">None waiting.</p>
-            ) : (
-              <div className="space-y-2">
-                {payouts.filter(p => p.status === 'approved').map(p => (
-                  <div key={p.id} className="bg-white border border-blue-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3 items-center">
-                    <div className="text-sm">
-                      <p className="font-bold text-gray-800">{findSellerName(p.seller_id)}</p>
-                      <p className="text-gray-600">GHS {Number(p.amount).toFixed(2)}</p>
+                    <div className="flex gap-2 self-center">
+                      <button onClick={() => approveSeller(s)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✅ APPROVE</button>
+                      <button onClick={() => rejectSeller(s)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">❌ REJECT</button>
                     </div>
-                    <button onClick={() => markPayoutPaid(p)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold">💸 Mark Paid</button>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div>
-            <h3 className="font-bold text-gray-800 mb-3">✅ Paid Payouts</h3>
-            {payouts.filter(p => p.status === 'paid').length === 0 ? (
-              <p className="text-sm text-gray-500">None yet.</p>
-            ) : (
-              <div className="space-y-2">
-                {payouts.filter(p => p.status === 'paid').map(p => (
-                  <div key={p.id} className="bg-green-50 border border-green-200 rounded-xl p-3 flex justify-between items-center text-sm">
-                    <div>
-                      <p className="font-bold">{findSellerName(p.seller_id)}</p>
-                      <p className="text-xs text-gray-500">{new Date(p.paid_at).toLocaleString('en-GB')}</p>
-                    </div>
-                    <p className="font-bold text-green-700">GHS {Number(p.amount).toFixed(2)}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+                ))
+              )}
+            </div>
+          )}
 
-      {tab === 'add-product' && (
-        <div className="bg-white rounded-xl shadow p-4 sm:p-6 max-w-2xl">
-          <form onSubmit={handleAdminAddProduct} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Sell As</label>
-              <select value={productForm.seller_id} onChange={(e) => updateProduct('seller_id', e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm">
-                <option value="STORE">🏪 B STORE (store itself)</option>
-                {approvedSellers.map(s => <option key={s.user_id} value={s.user_id}>👤 {s.full_name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Product Name</label>
-              <input type="text" required value={productForm.name} onChange={(e) => updateProduct('name', e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Description</label>
-              <textarea rows={3} value={productForm.description} onChange={(e) => updateProduct('description', e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Category</label>
-                <select required value={productForm.category_name} onChange={(e) => updateProduct('category_name', e.target.value)}
-                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm">
-                  <option value="">Select...</option>
-                  {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Price (GHS)</label>
-                <input type="number" step="0.01" required value={productForm.price} onChange={(e) => updateProduct('price', e.target.value)}
-                  className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Stock</label>
-              <input type="number" required value={productForm.stock} onChange={(e) => updateProduct('stock', e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Product Image</label>
-              <div className="space-y-2 mt-1">
-                <input type="file" accept="image/*" onChange={handleAdminImageUpload} disabled={uploading} className="w-full text-xs" />
-                {uploading && <p className="text-xs text-amber-600">Uploading...</p>}
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 h-px bg-gray-200"></div>
-                  <span className="text-xs text-gray-400">OR</span>
-                  <div className="flex-1 h-px bg-gray-200"></div>
-                </div>
-                <input type="url" value={productForm.image_url} onChange={(e) => updateProduct('image_url', e.target.value)}
-                  placeholder="Paste image URL"
-                  className="w-full px-3 py-2 border rounded-lg text-sm" />
-              </div>
-            </div>
-            {productForm.image_url && (
-              <div className="w-32 h-32 bg-gray-50 rounded-lg border flex items-center justify-center p-2">
-                <img src={productForm.image_url} className="max-w-full max-h-full object-contain" />
-              </div>
-            )}
-            {productMsg && (
-              <div className={`text-xs px-3 py-2 rounded-lg ${productMsg.startsWith('✅') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                {productMsg}
-              </div>
-            )}
-            <button type="submit" disabled={uploading} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-lg text-sm disabled:opacity-60">
-              Add Product (Auto-Approved)
-            </button>
-          </form>
-        </div>
-      )}
-
-      {tab === 'orders' && (
-        <div className="space-y-4">
-          {orders.length === 0 ? (
-            <p className="text-gray-500 text-sm">No orders yet.</p>
-          ) : (
-            orders.map(order => (
-              <div key={order.id} className="bg-white border rounded-xl p-3 sm:p-4">
-                <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
-                  <div>
-                    <p className="text-xs text-gray-500">Order #{order.id.slice(0, 8)}...</p>
-                    <p className="text-xs text-gray-400">
-                      {new Date(order.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                    </p>
-                  </div>
-                  <span className={`text-xs px-2 py-1 rounded font-semibold ${statusColor(order.order_status)}`}>
-                    {order.order_status.toUpperCase()}
-                  </span>
-                </div>
-                <div className="text-sm text-gray-700 mb-3">
-                  <p><strong>{order.customer_name}</strong> — {order.customer_phone}</p>
-                </div>
-                {order.is_multi_seller && (
-                  <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs mb-3">
-                    <p className="font-semibold text-amber-800">📦 Multi-Seller → {order.consolidation_point}</p>
-                  </div>
-                )}
-                {!order.is_multi_seller && order.selected_delivery_point && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-2 text-xs mb-3">
-                    <p className="font-semibold text-blue-800">📍 {order.selected_delivery_point}</p>
-                  </div>
-                )}
-                <div className="space-y-2 mb-3">
-                  {order.items.map(item => (
-                    <div key={item.id} className="flex items-center gap-3 text-sm border-l-4 border-indigo-300 pl-3 flex-wrap">
-                      <div className="w-10 h-10 bg-gray-50 rounded border flex items-center justify-center p-0.5 flex-shrink-0">
-                        <img src={item.product_image || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
+          {tab === 'products' && (
+            <div className="space-y-3">
+              {pendingProducts.length === 0 ? (
+                <p className="text-gray-500 text-sm">No products pending approval.</p>
+              ) : (
+                pendingProducts.map(p => (
+                  <div key={p.id} className="bg-white border border-blue-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
+                    <div className="flex gap-3 items-center flex-1 min-w-0">
+                      <div className="w-14 h-14 bg-gray-50 rounded-lg border flex items-center justify-center p-1 flex-shrink-0">
+                        <img src={p.image_url || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
                       </div>
-                      <div className="flex-1 min-w-[140px]">
-                        <p className="font-medium text-gray-800 text-xs sm:text-sm">{item.product_name}</p>
-                        <p className="text-[10px] sm:text-xs text-gray-500">{item.seller_name} • ×{item.quantity} • GHS {Number(item.subtotal).toFixed(2)}</p>
+                      <div className="text-sm min-w-0">
+                        <p className="font-bold text-gray-800 truncate">{p.name}</p>
+                        <p className="text-gray-600 text-xs">{p.category_name} • GHS {Number(p.price).toFixed(2)} • Stock: {p.stock}</p>
                       </div>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColor(item.seller_status)}`}>{item.seller_status}</span>
-                      <button onClick={() => notifySeller(item, order)} className="bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded text-[10px] font-semibold">
-                        📲
-                      </button>
                     </div>
-                  ))}
-                </div>
-                <div className="border-t pt-3 flex flex-wrap justify-between items-center gap-2">
-                  <div className="text-xs text-gray-500">💳 {order.payment_method.replace('_', ' ')}</div>
-                  <div className="font-bold text-indigo-600 text-sm">GHS {Number(order.total).toFixed(2)}</div>
-                </div>
-                <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
-                  {order.order_status === 'placed' && (
-                    <button onClick={() => updateOrderStatus(order.id, 'processing')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold">Processing</button>
-                  )}
-                  {order.order_status === 'processing' && (
-                    <button onClick={() => updateOrderStatus(order.id, 'dispatched')} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs font-semibold">Dispatched</button>
-                  )}
-                  {order.order_status === 'dispatched' && (
-                    <button onClick={() => updateOrderStatus(order.id, 'delivered')} className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-xs font-semibold">Delivered</button>
-                  )}
-                  {order.order_status === 'delivered' && (
-                    <button onClick={() => updateOrderStatus(order.id, 'completed')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold">Completed</button>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {tab === 'sellers' && (
-        <div className="space-y-3">
-          {pendingSellers.length === 0 ? (
-            <p className="text-gray-500 text-sm">No pending seller applications.</p>
-          ) : (
-            pendingSellers.map(s => (
-              <div key={s.id} className="bg-white border border-amber-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
-                <div className="text-sm">
-                  <p className="font-bold text-gray-800">{s.full_name}</p>
-                  <p className="text-gray-600 text-xs">📞 {s.phone} | 💬 {s.whatsapp}</p>
-                  <p className="text-gray-600 text-xs">📍 {s.region} — {s.address}</p>
-                  <p className="text-gray-500 text-xs mt-1">Delivery: {s.location_1}{s.location_2 ? ` / ${s.location_2}` : ''}</p>
-                </div>
-                <div className="flex gap-2 self-center">
-                  <button onClick={() => approveSeller(s)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold">✅ Approve</button>
-                  <button onClick={() => rejectSeller(s)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold">❌ Reject</button>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {tab === 'products' && (
-        <div className="space-y-3">
-          {pendingProducts.length === 0 ? (
-            <p className="text-gray-500 text-sm">No products pending approval.</p>
-          ) : (
-            pendingProducts.map(p => (
-              <div key={p.id} className="bg-white border border-blue-300 rounded-xl p-3 sm:p-4 flex flex-wrap justify-between gap-3">
-                <div className="flex gap-3 items-center flex-1 min-w-0">
-                  <div className="w-14 h-14 bg-gray-50 rounded-lg border flex items-center justify-center p-1 flex-shrink-0">
-                    <img src={p.image_url || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
+                    <div className="flex gap-2 self-center">
+                      <button onClick={() => approveProduct(p)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✅ APPROVE</button>
+                      <button onClick={() => rejectProduct(p)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">❌ REJECT</button>
+                    </div>
                   </div>
-                  <div className="text-sm min-w-0">
-                    <p className="font-bold text-gray-800 truncate">{p.name}</p>
-                    <p className="text-gray-600 text-xs">{p.category_name} • GHS {Number(p.price).toFixed(2)} • Stock: {p.stock}</p>
-                    <p className="text-xs text-gray-500">Seller: {p.seller_name}</p>
-                  </div>
-                </div>
-                <div className="flex gap-2 self-center">
-                  <button onClick={() => approveProduct(p)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-semibold">✅ Approve</button>
-                  <button onClick={() => rejectProduct(p)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold">❌ Reject</button>
-                </div>
-              </div>
-            ))
+                ))
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      {tab === 'categories' && (
-        <div className="bg-white rounded-xl shadow p-4 sm:p-6">
-          <form onSubmit={addCategory} className="flex gap-2 mb-4">
-            <input type="text" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} placeholder="New category name"
-              className="flex-1 px-3 py-2 border rounded-lg text-sm" />
-            <button type="submit" className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-semibold">Add</button>
-          </form>
-          <div className="space-y-2">
-            {categories.length === 0 ? (
-              <p className="text-gray-500 text-sm">No categories yet.</p>
-            ) : (
-              categories.map(c => (
-                <div key={c.id} className="flex flex-wrap justify-between items-center bg-gray-50 border px-3 py-2 rounded-lg text-sm gap-2">
-                  <span className="font-medium">{c.name}</span>
+          {tab === 'categories' && (
+            <div className="bg-white rounded-xl shadow p-4 sm:p-6">
+              <form onSubmit={addCategory} className="flex gap-2 mb-4">
+                <input type="text" value={newCategory} onChange={(e) => setNewCategory(e.target.value)} placeholder="NEW CATEGORY NAME" className="flex-1 px-3 py-2 border rounded-lg text-sm uppercase" />
+                <button type="submit" className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-semibold uppercase">ADD</button>
+              </form>
+              <div className="space-y-2">
+                {categories.map(c => (
+                  <div key={c.id} className="flex flex-wrap justify-between items-center bg-gray-50 border px-3 py-2 rounded-lg text-sm gap-2">
+                    <span className="font-medium uppercase">{c.name}</span>
+                    <div className="flex gap-2">
+                      <button onClick={() => setEditingCategory({ id: c.id, name: c.name, oldName: c.name })} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">✏️ EDIT</button>
+                      <button onClick={() => tryDeleteCategory(c)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">🗑️ DELETE</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {editingProduct && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <h2 className="text-lg font-bold mb-4 uppercase">EDIT PRODUCT</h2>
+                <form onSubmit={handleSaveEdit} className="space-y-3">
+                  <input type="text" required value={editingProduct.name} onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })} placeholder="NAME" className="w-full px-3 py-2 border rounded-lg text-sm" />
+                  <textarea rows={2} value={editingProduct.description || ''} onChange={(e) => setEditingProduct({ ...editingProduct, description: e.target.value })} placeholder="DESCRIPTION" className="w-full px-3 py-2 border rounded-lg text-sm" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <select required value={editingProduct.category_name} onChange={(e) => setEditingProduct({ ...editingProduct, category_name: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm">
+                      {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+                    <input type="number" step="0.01" required value={editingProduct.price} onChange={(e) => setEditingProduct({ ...editingProduct, price: e.target.value })} placeholder="PRICE" className="w-full px-3 py-2 border rounded-lg text-sm" />
+                  </div>
+                  <input type="number" required value={editingProduct.stock} onChange={(e) => setEditingProduct({ ...editingProduct, stock: e.target.value })} placeholder="STOCK" className="w-full px-3 py-2 border rounded-lg text-sm" />
+                  <input type="url" value={editingProduct.image_url || ''} onChange={(e) => setEditingProduct({ ...editingProduct, image_url: e.target.value })} placeholder="IMAGE URL" className="w-full px-3 py-2 border rounded-lg text-sm" />
+                  <div className="flex gap-2 pt-2">
+                    <button type="button" onClick={() => setEditingProduct(null)} className="flex-1 bg-gray-200 text-gray-700 font-semibold py-2 rounded-lg text-sm uppercase">CANCEL</button>
+                    <button type="submit" className="flex-1 bg-indigo-600 text-white font-bold py-2 rounded-lg text-sm uppercase">SAVE</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {editingCategory && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+                <h2 className="text-lg font-bold mb-4 uppercase">RENAME CATEGORY</h2>
+                <form onSubmit={saveCategoryEdit} className="space-y-3">
+                  <input type="text" required value={editingCategory.name} onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" />
                   <div className="flex gap-2">
-                    <button
-                      onClick={() => setEditingCategory({ id: c.id, name: c.name, oldName: c.name })}
-                      className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold"
-                    >✏️ Edit</button>
-                    <button
-                      onClick={() => tryDeleteCategory(c)}
-                      className="bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs font-semibold"
-                    >🗑️ Delete</button>
+                    <button type="button" onClick={() => setEditingCategory(null)} className="flex-1 bg-gray-200 text-gray-700 font-semibold py-2 rounded-lg text-sm uppercase">CANCEL</button>
+                    <button type="submit" className="flex-1 bg-indigo-600 text-white font-bold py-2 rounded-lg text-sm uppercase">SAVE</button>
                   </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {deleteCategoryModal && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+                <h2 className="text-lg font-bold mb-2 uppercase">⚠️ CATEGORY IN USE</h2>
+                <p className="text-sm text-gray-600 mb-3">"{deleteCategoryModal.category.name}" has {deleteCategoryModal.products.length} product(s):</p>
+                <ul className="list-disc list-inside text-xs text-gray-500 mb-4 max-h-32 overflow-y-auto">
+                  {deleteCategoryModal.products.map(p => <li key={p.id}>{p.name}</li>)}
+                </ul>
+                <select value={deleteCategoryModal.moveTo} onChange={(e) => setDeleteCategoryModal({ ...deleteCategoryModal, moveTo: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm mb-4">
+                  <option value="">MOVE THEM TO...</option>
+                  {categories.filter(c => c.id !== deleteCategoryModal.category.id).map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                </select>
+                <div className="flex gap-2">
+                  <button onClick={() => setDeleteCategoryModal(null)} className="flex-1 bg-gray-200 text-gray-700 font-semibold py-2 rounded-lg text-sm uppercase">CANCEL</button>
+                  <button onClick={confirmMoveAndDelete} className="flex-1 bg-red-600 text-white font-bold py-2 rounded-lg text-sm uppercase">MOVE & DELETE</button>
                 </div>
-              ))
-            )}
-          </div>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

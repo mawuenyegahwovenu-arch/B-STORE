@@ -14,6 +14,7 @@ import OrderDetail from './pages/OrderDetail';
 import ProductDetail from './pages/ProductDetail';
 import Wishlist from './pages/Wishlist';
 import CustomerProfile from './pages/CustomerProfile';
+import ResetPassword from './pages/ResetPassword';
 
 function App() {
   return (
@@ -35,6 +36,7 @@ function App() {
           <Route path="/order/:id" element={<OrderDetail />} />
           <Route path="/product/:id" element={<ProductDetail />} />
           <Route path="/wishlist" element={<Wishlist />} />
+       <Route path="/reset-password" element={<ResetPassword />} />
         </Routes>
       </div>
       <Footer />

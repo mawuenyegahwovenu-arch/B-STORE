@@ -14,6 +14,8 @@ export default function Orders() {
   const { user } = useAuth();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [orderSearch, setOrderSearch] = useState('');
+  const [orderFilter, setOrderFilter] = useState('all');
 
   useEffect(() => {
     if (user) loadOrders();
@@ -81,6 +83,24 @@ export default function Orders() {
     );
   }
 
+  // Filter orders
+  const filteredOrders = orders.filter(order => {
+    if (orderFilter === 'active') {
+      if (!['placed', 'processing', 'dispatched'].includes(order.order_status)) return false;
+    } else if (orderFilter !== 'all') {
+      if (order.order_status !== orderFilter) return false;
+    }
+    if (orderSearch.trim()) {
+      const q = orderSearch.toLowerCase();
+      const matchesId = order.id.toLowerCase().includes(q);
+      const matchesProduct = (order.items || []).some(i =>
+        (i.product_name || '').toLowerCase().includes(q)
+      );
+      return matchesId || matchesProduct;
+    }
+    return true;
+  });
+
   if (loading) {
     return <p className="text-center py-16 text-gray-500">Loading orders...</p>;
   }
@@ -88,6 +108,47 @@ export default function Orders() {
   return (
     <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
       <h1 className="text-xl sm:text-2xl font-bold text-indigo-900 mb-4 sm:mb-6">My Orders</h1>
+
+      {orders.length > 0 && (
+        <>
+          <input
+            type="text"
+            value={orderSearch}
+            onChange={(e) => setOrderSearch(e.target.value)}
+            placeholder="🔍 Search by order ID or product name..."
+            className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-3"
+          />
+
+          <div className="flex flex-wrap gap-2 mb-4">
+            {[
+              { id: 'all', label: 'All' },
+              { id: 'active', label: 'Active' },
+              { id: 'delivered', label: 'Delivered' },
+              { id: 'completed', label: 'Completed' },
+              { id: 'cancelled', label: 'Cancelled' },
+            ].map(f => {
+              const count = f.id === 'all'
+                ? orders.length
+                : f.id === 'active'
+                ? orders.filter(o => ['placed', 'processing', 'dispatched'].includes(o.order_status)).length
+                : orders.filter(o => o.order_status === f.id).length;
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => setOrderFilter(f.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                    orderFilter === f.id
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white border text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {f.label} ({count})
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {orders.length === 0 ? (
         <div className="bg-white rounded-xl shadow p-10 text-center">
@@ -97,9 +158,15 @@ export default function Orders() {
             Start Shopping
           </Link>
         </div>
+      ) : filteredOrders.length === 0 ? (
+        <div className="bg-white rounded-xl shadow p-8 text-center">
+          <p className="text-gray-500">
+            {orderSearch ? `No orders matching "${orderSearch}".` : 'No orders match your filter.'}
+          </p>
+        </div>
       ) : (
         <div className="space-y-4 sm:space-y-5">
-          {orders.map(order => {
+          {filteredOrders.map(order => {
             const master = masterStage(order.items);
             return (
               <Link

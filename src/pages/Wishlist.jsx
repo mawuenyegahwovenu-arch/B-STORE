@@ -69,7 +69,7 @@ export default function Wishlist() {
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
       <h1 className="text-xl sm:text-2xl font-bold text-indigo-900 mb-4 sm:mb-6">
-        ❤️ My Wishlist ({items.length})
+        ❤️ My FAVOURITES ({items.length})
       </h1>
 
       {items.length === 0 ? (
