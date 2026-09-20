@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
+import imageCompression from 'browser-image-compression';
 
 export default function SellerDashboard() {
   const { user, isSeller, isAdmin } = useAuth();
@@ -12,7 +13,7 @@ export default function SellerDashboard() {
   const isImpersonating = isAdmin && sellerId && sellerId !== user?.id;
   const canAccess = isSeller || (isAdmin && sellerId);
 
-  const [tab, setTab] = useState('products');
+  const [tab, setTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [unifiedSearch, setUnifiedSearch] = useState('');
   const [products, setProducts] = useState([]);
@@ -70,34 +71,56 @@ export default function SellerDashboard() {
     setForm({ ...form, [field]: value });
   }
 
-  async function handleImageUpload(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      alert('Image too large. Max 5MB.');
-      return;
-    }
-    setUploading(true);
-    const ext = file.name.split('.').pop();
-    const filename = `${viewingSellerId}/${Date.now()}.${ext}`;
+async function handleImageUpload(e) {
+  let file = e.target.files[0];
+  if (!file) return;
 
-    const { error: uploadError } = await supabase.storage
-      .from('product-images')
-      .upload(filename, file, { upsert: false });
+  const TWO_MB = 2 * 1024 * 1024;
+  const ONE_AND_HALF_MB = 1.5 * 1024 * 1024;
 
-    if (uploadError) {
-      alert('Upload failed: ' + uploadError.message);
-      setUploading(false);
-      return;
-    }
-
-    const { data: urlData } = supabase.storage
-      .from('product-images')
-      .getPublicUrl(filename);
-
-    update('image_url', urlData.publicUrl);
-    setUploading(false);
+  // Hard limit: reject anything over 2MB
+  if (file.size > TWO_MB) {
+    alert('Image is too large (over 2MB). Please upload a smaller image, or take a screenshot of it and upload that instead.');
+    e.target.value = '';
+    return;
   }
+
+  setUploading(true);
+
+  // Compress if larger than 1.5MB
+  if (file.size > ONE_AND_HALF_MB) {
+    try {
+      file = await imageCompression(file, {
+        maxSizeMB: 0.5,
+        maxWidthOrHeight: 1600,
+        useWebWorker: true,
+      });
+    } catch (err) {
+      console.warn('Compression failed, uploading original:', err);
+      // Fallback: upload original (still under 2MB, so it's fine)
+    }
+  }
+
+  const ext = file.name.split('.').pop() || 'jpg';
+  const filename = `${viewingSellerId}/${Date.now()}.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from('product-images')
+    .upload(filename, file, { upsert: false });
+
+  if (uploadError) {
+    alert('Upload failed: ' + uploadError.message);
+    setUploading(false);
+    return;
+  }
+
+  const { data: urlData } = supabase.storage
+    .from('product-images')
+    .getPublicUrl(filename);
+
+  update('image_url', urlData.publicUrl);
+  setUploading(false);
+}
 
   async function handleAddProduct(e) {
     e.preventDefault();
@@ -161,7 +184,7 @@ export default function SellerDashboard() {
       .single();
 
     if (!item) return;
-    // Check if ALL items in this order are now delivered → send "Order Ready" email to customer
+
     if (newStatus === 'delivered') {
       const { data: allItems } = await supabase
         .from('order_items')
@@ -291,7 +314,7 @@ export default function SellerDashboard() {
   const newOrdersCount = orders.filter(o => o.seller_status === 'placed').length;
 
   const customersWithAction = customers.filter(c =>
-    c.orders.some(o => ['placed', 'processing', 'dispatched'].includes(o.seller_status))
+    c.orders.some(o => ['placed', 'processing'].includes(o.seller_status))
   ).length;
 
   const deliveredItems = orders.filter(o => o.seller_status === 'delivered');
@@ -352,14 +375,20 @@ export default function SellerDashboard() {
   });
 
   const sidebarMenu = [
+    { id: 'overview', icon: '📊', label: 'OVERVIEW', badge: 0 },
     { id: 'products', icon: '📦', label: 'PRODUCTS', badge: 0 },
     { id: 'add', icon: '➕', label: 'ADD PRODUCT', badge: 0 },
     { id: 'orders', icon: '📋', label: 'ORDERS', badge: newOrdersCount },
     { id: 'customers', icon: '👤', label: 'CUSTOMERS', badge: customersWithAction },
     { id: 'wallet', icon: '💰', label: 'WALLET', badge: 0 },
+    { id: 'exit', icon: '🚪', label: 'EXIT TO SHOP', badge: 0 },
   ];
 
   function handleTabClick(id) {
+    if (id === 'exit') {
+      navigate('/');
+      return;
+    }
     setTab(id);
     setSidebarOpen(false);
     setUnifiedSearch('');
@@ -387,7 +416,7 @@ export default function SellerDashboard() {
   function Badge({ count }) {
     if (!count) return null;
     return (
-      <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+      <span className="ml-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
         {count > 9 ? '9+' : count}
       </span>
     );
@@ -415,14 +444,14 @@ export default function SellerDashboard() {
             <button
               key={item.id}
               onClick={() => handleTabClick(item.id)}
-              className={`w-full text-left px-4 py-3 flex items-center gap-3 text-sm font-semibold transition ${
+              className={`w-full text-left px-4 py-3 flex items-center gap-3 text-sm font-semibold transition-transform duration-200 ${
                 tab === item.id
                   ? 'bg-indigo-700 border-l-4 border-amber-400'
-                  : 'hover:bg-indigo-800'
+                  : 'hover:bg-indigo-800 hover:scale-110'
               }`}
             >
               <span className="text-lg">{item.icon}</span>
-              <span className="flex-1 uppercase">{item.label}</span>
+              <span className="truncate uppercase">{item.label}</span>
               <Badge count={item.badge} />
             </button>
           ))}
@@ -444,8 +473,8 @@ export default function SellerDashboard() {
       <div className="flex-1 min-w-0">
         <div className="md:hidden bg-indigo-900 text-white px-4 py-3 flex items-center justify-between sticky top-0 z-30">
           <button onClick={() => setSidebarOpen(true)} className="text-2xl leading-none">☰</button>
-          <h1 className="font-bold text-sm uppercase">SELLER DASHBOARD</h1>
-          <div className="w-6"></div>
+          <span className="text-xs font-bold uppercase truncate max-w-[50%]">{sellerInfo?.full_name || user?.email?.split('@')[0] || 'SELLER'}</span>
+          <Link to="/" className="text-xs font-bold uppercase hover:text-amber-400">🏠 HOME</Link>
         </div>
 
         <div className="p-3 sm:p-6">
@@ -463,25 +492,129 @@ export default function SellerDashboard() {
             />
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
-            <div className="bg-gradient-to-br from-indigo-50 to-white p-4 rounded-xl shadow">
-              <p className="text-xs text-gray-500 uppercase">Products</p>
-              <p className="text-2xl font-bold text-indigo-600">{products.length}</p>
-            </div>
-            <div className="bg-gradient-to-br from-amber-50 to-white p-4 rounded-xl shadow">
-              <p className="text-xs text-gray-500 uppercase">Pending</p>
-              <p className="text-2xl font-bold text-amber-600">{pendingCount}</p>
-            </div>
-            <div className="bg-gradient-to-br from-green-50 to-white p-4 rounded-xl shadow">
-              <p className="text-xs text-gray-500 uppercase">Approved</p>
-              <p className="text-2xl font-bold text-green-600">{approvedCount}</p>
-            </div>
-            <div className="bg-gradient-to-br from-blue-50 to-white p-4 rounded-xl shadow">
-              <p className="text-xs text-gray-500 uppercase">Sales</p>
-              <p className="text-2xl font-bold text-blue-600">GHS {totalRevenue.toFixed(2)}</p>
-            </div>
-          </div>
+{/* STAT CARDS — always visible */}
+<div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
+  {/* Products */}
+  <div className="bg-gradient-to-br from-indigo-100 via-indigo-50 to-white p-4 rounded-xl shadow-md border border-indigo-100">
+    <p className="text-xs text-indigo-700 font-semibold uppercase tracking-wider">Products</p>
+    <p className="text-2xl font-black text-indigo-700">{products.length}</p>
+  </div>
 
+  {/* Pending */}
+  <div className="bg-gradient-to-br from-amber-100 via-amber-50 to-white p-4 rounded-xl shadow-md border border-amber-100">
+    <p className="text-xs text-amber-700 font-semibold uppercase tracking-wider">Pending</p>
+    <p className="text-2xl font-black text-amber-700">{pendingCount}</p>
+  </div>
+
+  {/* Approved */}
+  <div className="bg-gradient-to-br from-emerald-100 via-emerald-50 to-white p-4 rounded-xl shadow-md border border-emerald-100">
+    <p className="text-xs text-emerald-700 font-semibold uppercase tracking-wider">Approved</p>
+    <p className="text-2xl font-black text-emerald-700">{approvedCount}</p>
+  </div>
+
+  {/* Sales */}
+  <div className="bg-gradient-to-br from-blue-100 via-blue-50 to-white p-4 rounded-xl shadow-md border border-blue-100">
+    <p className="text-xs text-blue-700 font-semibold uppercase tracking-wider">Sales</p>
+    <p className="text-2xl font-black text-blue-700">GHS {totalRevenue.toFixed(2)}</p>
+  </div>
+</div>
+          {/* ===== OVERVIEW ===== */}
+          {tab === 'overview' && (
+            <div className="space-y-4">
+              {(() => {
+                const actions = [];
+                if (newOrdersCount > 0) actions.push({ icon: '📋', text: `${newOrdersCount} order${newOrdersCount > 1 ? 's' : ''} waiting to be processed`, tab: 'orders' });
+                if (pendingCount > 0) actions.push({ icon: '⏳', text: `${pendingCount} product${pendingCount > 1 ? 's' : ''} pending approval`, tab: 'products' });
+                if (customersWithAction > 0) actions.push({ icon: '👤', text: `${customersWithAction} customer${customersWithAction > 1 ? 's' : ''} waiting`, tab: 'customers' });
+                if (availableBalance > 0) actions.push({ icon: '💰', text: `GHS ${availableBalance.toFixed(2)} ready to withdraw`, tab: 'wallet' });
+
+                if (actions.length === 0) {
+                  return (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
+                      <p className="font-bold text-emerald-800 text-sm">✅ ALL CAUGHT UP</p>
+                      <p className="text-xs text-emerald-700 mt-1">No pending tasks. Keep it up!</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                    <p className="font-bold text-amber-800 text-sm mb-2">⚠️ ACTION ITEMS</p>
+                    <div className="space-y-2">
+                      {actions.map((a, i) => (
+                        <button
+                          key={i}
+                          onClick={() => handleTabClick(a.tab)}
+                          className="w-full flex items-center gap-3 text-left text-sm text-amber-900 hover:bg-amber-100 rounded-lg px-2 py-2 transition"
+                        >
+                          <span className="text-base">{a.icon}</span>
+                          <span className="flex-1">{a.text}</span>
+                          <span className="text-amber-500">›</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="bg-white rounded-xl shadow p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-bold text-gray-800 text-sm uppercase">📋 RECENT ORDERS</h3>
+                  {orders.length > 0 && (
+                    <button onClick={() => handleTabClick('orders')} className="text-xs text-indigo-600 font-semibold uppercase hover:text-indigo-800">
+                      See All →
+                    </button>
+                  )}
+                </div>
+                {orders.length === 0 ? (
+                  <p className="text-sm text-gray-500">No orders yet. Share your shop link to get started!</p>
+                ) : (
+                  <div className="space-y-2">
+                    {orders.slice(0, 5).map(o => (
+                      <div key={o.id} className="flex items-center gap-3 py-2 border-b last:border-0">
+                        <div className="w-10 h-10 bg-gray-50 rounded border flex items-center justify-center p-0.5 flex-shrink-0">
+                          <img src={o.product_image || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-gray-800 truncate">{o.product_name}</p>
+                          <p className="text-xs text-gray-500">#{o.order_id.slice(0, 8)} • {o.customer_name || 'Customer'}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-bold text-indigo-700">GHS {Number(o.subtotal).toFixed(2)}</p>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-semibold ${
+                            o.seller_status === 'placed' ? 'bg-amber-100 text-amber-800' :
+                            o.seller_status === 'processing' ? 'bg-blue-100 text-blue-800' :
+                            'bg-green-100 text-green-800'
+                          }`}>
+                            {o.seller_status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => handleTabClick('add')}
+                  className="bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-xl p-4 shadow-md hover:from-emerald-400 hover:to-emerald-500 transition text-left"
+                >
+                  <span className="text-2xl block mb-1">➕</span>
+                  <span className="font-bold text-sm uppercase">ADD PRODUCT</span>
+                </button>
+                <button
+                  onClick={() => handleTabClick('wallet')}
+                  className="bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl p-4 shadow-md hover:from-blue-400 hover:to-blue-500 transition text-left"
+                >
+                  <span className="text-2xl block mb-1">💰</span>
+                  <span className="font-bold text-sm uppercase">WALLET</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ===== PRODUCTS ===== */}
           {tab === 'products' && (
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2">
@@ -523,6 +656,7 @@ export default function SellerDashboard() {
             </div>
           )}
 
+          {/* ===== ADD PRODUCT ===== */}
           {tab === 'add' && (
             <div className="bg-white rounded-xl shadow p-4 sm:p-6 max-w-2xl">
               {isImpersonating && (
@@ -577,26 +711,31 @@ export default function SellerDashboard() {
             </div>
           )}
 
+          {/* ===== ORDERS ===== */}
           {tab === 'orders' && (
             <div className="space-y-3">
-              <div className="flex flex-wrap gap-2">
-                {[
-                  { id: 'all', label: 'ALL' },
-                  { id: 'placed', label: 'PLACED' },
-                  { id: 'processing', label: 'PROCESSING' },
-                  { id: 'dispatched', label: 'DISPATCHED' },
-                  { id: 'delivered', label: 'DELIVERED' },
-                  { id: 'completed', label: 'COMPLETED' },
-                ].map(f => {
-                  const count = f.id === 'all' ? orders.length : orders.filter(o => o.seller_status === f.id).length;
-                  return (
-                    <button key={f.id} onClick={() => setSellerOrderFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sellerOrderFilter === f.id ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700'}`}>
-                      {f.label} ({count})
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex flex-wrap gap-2">
+          <div className="flex gap-2 overflow-x-auto pb-1 -mx-3 px-3">
+  {[
+    { id: 'all', label: 'ALL', color: 'indigo' },
+    { id: 'placed', label: 'PLACED', color: 'amber' },
+    { id: 'processing', label: 'PROCESSING', color: 'blue' },
+    { id: 'delivered', label: 'DELIVERED', color: 'green' },
+  ].map(f => {
+    const count = f.id === 'all' ? orders.length : orders.filter(o => o.seller_status === f.id).length;
+    const active = sellerOrderFilter === f.id;
+    const activeColor = f.color === 'indigo' ? 'bg-indigo-600' : f.color === 'amber' ? 'bg-amber-500' : f.color === 'blue' ? 'bg-blue-500' : 'bg-green-500';
+    return (
+      <button
+        key={f.id}
+        onClick={() => setSellerOrderFilter(f.id)}
+        className={`flex-shrink-0 whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-bold uppercase transition ${active ? `${activeColor} text-white shadow` : 'bg-white border text-gray-700'}`}
+      >
+        {f.label} ({count})
+      </button>
+    );
+  })}
+</div>
+              <div className="flex gap-2 overflow-x-auto pb-1 -mx-3 px-3">
                 {[
                   { id: 'all', label: '💰 ALL PAYMENTS' },
                   { id: 'paystack', label: '💳 PAID ONLINE' },
@@ -604,20 +743,27 @@ export default function SellerDashboard() {
                 ].map(f => {
                   const count = f.id === 'all' ? orders.length : orders.filter(o => o.payment_method === f.id).length;
                   return (
-                    <button key={f.id} onClick={() => setSellerPaymentFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sellerPaymentFilter === f.id ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-700'}`}>
+                    <button key={f.id} onClick={() => setSellerPaymentFilter(f.id)} className={`px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap flex-shrink-0 ${sellerPaymentFilter === f.id ? 'bg-emerald-600 text-white' : 'bg-white border text-gray-700'}`}>
                       {f.label} ({count})
                     </button>
                   );
                 })}
               </div>
-              {filteredOrders.length === 0 ? (
-                <p className="text-gray-500 text-sm">No orders in this filter.</p>
-              ) : (
+{filteredOrders.length === 0 ? (
+  <div className="bg-white rounded-xl shadow p-8 text-center">
+    <p className="text-gray-500 text-sm mb-3">
+      No {sellerOrderFilter.toUpperCase()} orders.
+    </p>
+    <button onClick={() => setSellerOrderFilter('delivered')} className="text-indigo-600 text-xs font-semibold uppercase hover:text-indigo-800">
+      Check DELIVERED →
+    </button>
+  </div>
+) : (
                 filteredOrders.map(o => (
                   <div key={o.id} className="bg-white border rounded-xl p-3 sm:p-4">
                     <div className="flex justify-between text-xs mb-2">
                       <span className="font-bold text-gray-700">ORDER: {o.order_id.slice(0, 8)}...</span>
-                      <span className={`px-2 py-0.5 rounded font-semibold uppercase ${o.seller_status === 'placed' ? 'bg-amber-100 text-amber-800' : o.seller_status === 'processing' ? 'bg-blue-100 text-blue-800' : o.seller_status === 'dispatched' ? 'bg-indigo-100 text-indigo-800' : o.seller_status === 'delivered' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'}`}>
+                      <span className={`px-2 py-0.5 rounded font-semibold uppercase ${o.seller_status === 'placed' ? 'bg-amber-100 text-amber-800' : o.seller_status === 'processing' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
                         {o.seller_status}
                       </span>
                     </div>
@@ -643,9 +789,16 @@ export default function SellerDashboard() {
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
-                      {o.seller_status === 'placed' && <button onClick={() => markStatus(o.id, 'processing')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">MARK PROCESSING</button>}
-                      {o.seller_status === 'processing' && <button onClick={() => markStatus(o.id, 'dispatched')} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">MARK DISPATCHED</button>}
-                      {o.seller_status === 'dispatched' && <button onClick={() => markStatus(o.id, 'delivered')} className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">MARK DELIVERED</button>}
+                      {o.seller_status === 'placed' && (
+                        <button onClick={() => markStatus(o.id, 'processing')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">
+                          MARK PROCESSING
+                        </button>
+                      )}
+                      {o.seller_status === 'processing' && (
+                        <button onClick={() => markStatus(o.id, 'delivered')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">
+                          MARK DELIVERED
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))
@@ -653,6 +806,7 @@ export default function SellerDashboard() {
             </div>
           )}
 
+          {/* ===== CUSTOMERS ===== */}
           {tab === 'customers' && (
             <div className="space-y-3">
               {filteredCustomers.length === 0 ? (
@@ -660,7 +814,7 @@ export default function SellerDashboard() {
               ) : (
                 filteredCustomers.map(c => {
                   const newCount = c.orders.filter(o => o.seller_status === 'placed').length;
-                  const inProgressCount = c.orders.filter(o => ['processing', 'dispatched'].includes(o.seller_status)).length;
+                  const inProgressCount = c.orders.filter(o => o.seller_status === 'processing').length;
                   const deliveredCount = c.orders.filter(o => o.seller_status === 'delivered').length;
                   return (
                     <div key={c.customer_id} className="bg-white border rounded-xl p-3 sm:p-4">
@@ -675,8 +829,8 @@ export default function SellerDashboard() {
                         <div className="flex flex-wrap gap-2 self-center">
                           {newCount > 0 && <span className="bg-amber-100 text-amber-800 text-xs font-bold px-2 py-1 rounded uppercase">🔴 {newCount} NEW</span>}
                           {inProgressCount > 0 && <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2 py-1 rounded uppercase">🟠 {inProgressCount} IN PROGRESS</span>}
-                          {deliveredCount > 0 && <span className="bg-purple-100 text-purple-800 text-xs font-bold px-2 py-1 rounded uppercase">🟣 {deliveredCount} DELIVERED</span>}
-                          {newCount === 0 && inProgressCount === 0 && deliveredCount === 0 && <span className="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded uppercase">✅ ALL DONE</span>}
+                          {deliveredCount > 0 && <span className="bg-green-100 text-green-800 text-xs font-bold px-2 py-1 rounded uppercase">✅ {deliveredCount} DELIVERED</span>}
+                          {newCount === 0 && inProgressCount === 0 && deliveredCount === 0 && <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-1 rounded uppercase">— NO ORDERS</span>}
                         </div>
                       </div>
                       <div className="mt-3 space-y-2">
@@ -689,7 +843,7 @@ export default function SellerDashboard() {
                               <p className="font-medium text-gray-800 truncate">{o.product_name}</p>
                               <p className="text-gray-500">×{o.quantity} • GHS {Number(o.subtotal).toFixed(2)}</p>
                             </div>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase ${o.seller_status === 'placed' ? 'bg-amber-100 text-amber-800' : o.seller_status === 'processing' ? 'bg-blue-100 text-blue-800' : o.seller_status === 'dispatched' ? 'bg-indigo-100 text-indigo-800' : o.seller_status === 'delivered' ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'}`}>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase ${o.seller_status === 'placed' ? 'bg-amber-100 text-amber-800' : o.seller_status === 'processing' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}`}>
                               {o.seller_status}
                             </span>
                           </div>
@@ -702,6 +856,7 @@ export default function SellerDashboard() {
             </div>
           )}
 
+          {/* ===== WALLET ===== */}
           {tab === 'wallet' && (
             <div className="space-y-4">
               <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-xl p-4 sm:p-6 shadow-lg">
@@ -782,6 +937,7 @@ export default function SellerDashboard() {
             </div>
           )}
 
+          {/* ===== WALLET BREAKDOWN MODAL ===== */}
           {viewingWalletBreakdown && (
             <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
               <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">

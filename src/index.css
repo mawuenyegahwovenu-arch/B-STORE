@@ -2,7 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Ticker Banner Animation */
+/* ===========================
+   Ticker Banner
+   =========================== */
 @keyframes ticker-scroll {
   from {
     transform: translateX(0);
@@ -28,4 +30,40 @@
 .ticker-content span {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+/* ===========================
+   Drawer slide-down
+   =========================== */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slideDown {
+  animation: slideDown 0.2s ease-out;
+}
+
+/* ===========================
+   Hover zoom — DESKTOP
+   =========================== */
+button:hover,
+a:hover {
+  transform: scale(1.05);
+  transition: transform 0.2s ease-out;
+}
+
+/* ===========================
+   Tap press — MOBILE
+   =========================== */
+button:active,
+a:active {
+  transform: scale(0.97);
+  transition: transform 0.1s ease-out;
 }

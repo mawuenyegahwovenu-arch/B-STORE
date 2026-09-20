@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
-const STAGES = ['placed', 'processing', 'dispatched', 'delivered', 'completed'];
+const STAGES = ['placed', 'processing', 'delivered'];
 
 function stageIndex(status) {
   const i = STAGES.indexOf(status);
@@ -83,11 +83,9 @@ export default function Orders() {
     );
   }
 
-  // Filter orders
   const filteredOrders = orders.filter(order => {
     if (orderFilter === 'active') {
-      if (!['placed', 'processing', 'dispatched'].includes(order.order_status)) return false;
-    } else if (orderFilter !== 'all') {
+    if (!['placed', 'processing'].includes(order.order_status)) return false;
       if (order.order_status !== orderFilter) return false;
     }
     if (orderSearch.trim()) {
@@ -124,13 +122,12 @@ export default function Orders() {
               { id: 'all', label: 'All' },
               { id: 'active', label: 'Active' },
               { id: 'delivered', label: 'Delivered' },
-              { id: 'completed', label: 'Completed' },
               { id: 'cancelled', label: 'Cancelled' },
             ].map(f => {
               const count = f.id === 'all'
                 ? orders.length
                 : f.id === 'active'
-                ? orders.filter(o => ['placed', 'processing', 'dispatched'].includes(o.order_status)).length
+               ? orders.filter(o => ['placed', 'processing'].includes(o.order_status)).length
                 : orders.filter(o => o.order_status === f.id).length;
               return (
                 <button

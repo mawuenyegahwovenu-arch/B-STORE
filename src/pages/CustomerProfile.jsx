@@ -18,7 +18,6 @@ export default function CustomerProfile() {
   async function loadData() {
     setLoading(true);
 
-    // Load customer user
     const { data: userData } = await supabase
       .from('users')
       .select('*')
@@ -26,14 +25,12 @@ export default function CustomerProfile() {
       .maybeSingle();
     setCustomer(userData);
 
-    // Load their orders
     const { data: ordersData } = await supabase
       .from('orders')
       .select('*')
       .eq('customer_id', id)
       .order('created_at', { ascending: false });
 
-    // Enrich each order with its items
     const enriched = await Promise.all((ordersData || []).map(async (order) => {
       const { data: items } = await supabase
         .from('order_items')
@@ -88,9 +85,9 @@ export default function CustomerProfile() {
     switch (status) {
       case 'placed': return 'bg-amber-100 text-amber-800';
       case 'processing': return 'bg-blue-100 text-blue-800';
-      case 'dispatched': return 'bg-indigo-100 text-indigo-800';
-      case 'delivered': return 'bg-purple-100 text-purple-800';
-      case 'completed': return 'bg-green-100 text-green-800';
+      case 'delivered': return 'bg-green-100 text-green-800';
+      case 'dispatched': return 'bg-green-100 text-green-800'; // legacy
+      case 'completed': return 'bg-green-100 text-green-800';  // legacy
       case 'cancelled': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
     }
@@ -120,9 +117,9 @@ export default function CustomerProfile() {
   }
 
   const newOrders = orders.filter(o => o.order_status === 'placed');
-  const inProgress = orders.filter(o => ['processing', 'dispatched'].includes(o.order_status));
-  const readyForPickup = orders.filter(o => o.order_status === 'delivered');
-  const completedOrders = orders.filter(o => ['completed', 'cancelled'].includes(o.order_status));
+  const inProgress = orders.filter(o => o.order_status === 'processing');
+  const readyForPickup = orders.filter(o => ['delivered', 'dispatched', 'completed'].includes(o.order_status));
+  const completedOrders = orders.filter(o => o.order_status === 'cancelled');
 
   function OrderCard({ order }) {
     return (
@@ -189,23 +186,13 @@ export default function CustomerProfile() {
 
         <div className="flex flex-wrap gap-2 pt-3 border-t">
           {order.order_status === 'placed' && (
-            <button onClick={() => updateOrderStatus(order.id, 'processing')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold">
-              Mark Processing
+            <button onClick={() => updateOrderStatus(order.id, 'processing')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">
+              MARK PROCESSING
             </button>
           )}
           {order.order_status === 'processing' && (
-            <button onClick={() => updateOrderStatus(order.id, 'dispatched')} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs font-semibold">
-              Mark Dispatched
-            </button>
-          )}
-          {order.order_status === 'dispatched' && (
-            <button onClick={() => updateOrderStatus(order.id, 'delivered')} className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-xs font-semibold">
-              Mark Delivered
-            </button>
-          )}
-          {order.order_status === 'delivered' && (
-            <button onClick={() => updateOrderStatus(order.id, 'completed')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold">
-              Mark Completed
+            <button onClick={() => updateOrderStatus(order.id, 'delivered')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">
+              MARK DELIVERED
             </button>
           )}
         </div>
@@ -251,13 +238,12 @@ export default function CustomerProfile() {
             <p className="text-xs text-gray-500">In Progress</p>
           </div>
           <div className="text-center">
-            <p className="text-xl font-bold text-purple-600">{readyForPickup.length}</p>
+            <p className="text-xl font-bold text-green-600">{readyForPickup.length}</p>
             <p className="text-xs text-gray-500">Ready</p>
           </div>
         </div>
       </div>
 
-      {/* Orders by category */}
       {newOrders.length > 0 && (
         <div className="mb-6">
           <h2 className="text-base font-bold text-amber-700 mb-3">
@@ -282,8 +268,8 @@ export default function CustomerProfile() {
 
       {readyForPickup.length > 0 && (
         <div className="mb-6">
-          <h2 className="text-base font-bold text-purple-700 mb-3">
-            🟣 Ready for Pickup ({readyForPickup.length})
+          <h2 className="text-base font-bold text-green-700 mb-3">
+            🟢 Ready for Pickup ({readyForPickup.length})
           </h2>
           <div className="space-y-3">
             {readyForPickup.map(o => <OrderCard key={o.id} order={o} />)}
@@ -293,8 +279,8 @@ export default function CustomerProfile() {
 
       {completedOrders.length > 0 && (
         <div className="mb-6">
-          <h2 className="text-base font-bold text-green-700 mb-3">
-            ✅ Completed ({completedOrders.length})
+          <h2 className="text-base font-bold text-red-700 mb-3">
+            ❌ Cancelled ({completedOrders.length})
           </h2>
           <div className="space-y-3 opacity-75">
             {completedOrders.map(o => <OrderCard key={o.id} order={o} />)}

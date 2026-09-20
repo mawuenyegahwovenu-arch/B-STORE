@@ -61,7 +61,7 @@ export default function Navbar() {
         .from('orders')
         .select('id')
         .eq('customer_id', user.id)
-        .in('order_status', ['placed', 'processing', 'dispatched']);
+        .in('order_status', ['placed', 'processing']);
       setOrdersBadge(data?.length || 0);
     }
   }
@@ -89,7 +89,13 @@ export default function Navbar() {
 
   function mobileNavClass(path) {
     const active = location.pathname === path;
-    return `block px-4 py-3 hover:bg-indigo-700 text-sm uppercase ${active ? 'bg-indigo-700 font-bold border-l-4 border-amber-400' : ''}`;
+    return `flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase text-white ${active ? 'bg-indigo-700 font-bold border-l-4 border-amber-400' : ''}`;
+  }
+
+  // Hide storefront navbar only on full-screen dashboards
+  const hideOnRoutes = ['/seller', '/admin'];
+  if (hideOnRoutes.some(r => location.pathname.startsWith(r))) {
+    return null;
   }
 
   return (
@@ -112,8 +118,16 @@ export default function Navbar() {
               </Link>
             )}
             {isSeller && (
-              <Link to="/seller" className={`${navClass('/seller')} inline-flex items-center`}>
-                SELLER <Badge count={sellerBadge} color="bg-amber-500" />
+              <Link
+                to="/seller"
+                className="bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 px-3 py-1.5 rounded-lg text-xs font-bold uppercase text-white shadow-md inline-flex items-center gap-1.5"
+              >
+                🏪 SELLER
+                {sellerBadge > 0 && (
+                  <span className="bg-yellow-200 text-indigo-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                    {sellerBadge}
+                  </span>
+                )}
               </Link>
             )}
             {isAdmin && (
@@ -172,55 +186,108 @@ export default function Navbar() {
 
         {/* MOBILE menu */}
         {menuOpen && user && (
-          <div className="md:hidden bg-indigo-800 border-t border-indigo-700">
-            <div className="px-4 py-3 border-b border-indigo-700">
-              <p className="font-bold text-sm uppercase">{userData?.full_name || 'USER'}</p>
-              <p className="text-xs text-indigo-300 truncate">{user.email}</p>
-            </div>
-            <div className="py-2">
-              <Link to="/" className={mobileNavClass('/')}>🏪 HOME</Link>
-              <Link to="/wishlist" className={mobileNavClass('/wishlist')}>❤️ FAVOURITES</Link>
-              <Link to="/orders" className={mobileNavClass('/orders')}>
-                <span className="flex items-center justify-between">
+          <>
+            <div
+              className="md:hidden fixed inset-0 top-[57px] bg-black/50 z-30"
+              onClick={() => setMenuOpen(false)}
+            />
+            <div className="md:hidden bg-indigo-900 border-t border-indigo-700 relative z-40 animate-slideDown max-h-[calc(100vh-57px)] overflow-y-auto">
+              {/* User header */}
+              <div className="px-4 py-3 border-b border-indigo-700 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-amber-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                  {(userData?.full_name || user.email || 'U')[0].toUpperCase()}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-sm uppercase truncate text-white leading-tight">
+                    {userData?.full_name || 'USER'}
+                  </p>
+                  <p className="text-[11px] text-indigo-300 truncate leading-tight">{user.email}</p>
+                </div>
+              </div>
+
+              {/* Menu items */}
+              <div className="py-2">
+                <Link
+                  to="/"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (location.pathname === '/') window.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  className="flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase text-white"
+                >
+                  🏪 HOME
+                </Link>
+
+                <Link
+                  to="/wishlist"
+                  onClick={() => setMenuOpen(false)}
+                  className="flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase text-white"
+                >
+                  ❤️ FAVOURITES
+                </Link>
+
+                <Link
+                  to="/orders"
+                  onClick={() => setMenuOpen(false)}
+                  className="flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase text-white"
+                >
                   <span>📋 MY ORDERS</span>
                   {ordersBadge > 0 && (
-                    <span className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{ordersBadge}</span>
+                    <span className="bg-blue-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{ordersBadge}</span>
                   )}
-                </span>
-              </Link>
-              {isSeller && (
-                <Link to="/seller" className={mobileNavClass('/seller')}>
-                  <span className="flex items-center justify-between">
-                    <span>🏪 SELLER DASHBOARD</span>
+                </Link>
+
+                {isSeller && (
+                  <Link
+                    to="/seller"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase font-bold"
+                    style={{ color: '#fef08a' }}
+                  >
+                    🏪 SELLER DASHBOARD
                     {sellerBadge > 0 && (
-                      <span className="bg-amber-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{sellerBadge}</span>
+                      <span className="bg-yellow-200 text-indigo-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {sellerBadge}
+                      </span>
                     )}
-                  </span>
-                </Link>
-              )}
-              {isAdmin && (
-                <Link to="/admin" className={mobileNavClass('/admin')}>
-                  <span className="flex items-center justify-between">
-                    <span>⚙️ ADMIN DASHBOARD</span>
+                  </Link>
+                )}
+
+                {isAdmin && (
+                  <Link
+                    to="/admin"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase font-bold"
+                    style={{ color: '#fef08a' }}
+                  >
+                    ⚙️ ADMIN DASHBOARD
                     {adminBadge > 0 && (
-                      <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{adminBadge}</span>
+                      <span className="bg-yellow-200 text-indigo-900 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {adminBadge}
+                      </span>
                     )}
-                  </span>
-                </Link>
-              )}
-              {user && !isSeller && !isAdmin && (
-                <Link to="/become-seller" className={mobileNavClass('/become-seller')}>
-                  <span className="text-emerald-300">💼 BECOME A SELLER</span>
-                </Link>
-              )}
-              <button
-                onClick={() => setLogoutModal(true)}
-                className="w-full text-left px-4 py-3 hover:bg-indigo-700 text-sm text-red-300 border-t border-indigo-700 mt-2 uppercase"
-              >
-                🚪 LOGOUT
-              </button>
+                  </Link>
+                )}
+
+                {user && !isSeller && !isAdmin && (
+                  <Link
+                    to="/become-seller"
+                    onClick={() => setMenuOpen(false)}
+                    className="flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase"
+                  >
+                    <span className="bg-yellow-200 text-indigo-900 px-3 py-1 rounded text-xs font-bold">💼 BECOME A SELLER</span>
+                  </Link>
+                )}
+
+                <button
+                  onClick={() => setLogoutModal(true)}
+                  className="w-full flex items-center gap-2 px-4 py-3 hover:bg-indigo-700 text-sm uppercase text-red-300"
+                >
+                  🚪 LOGOUT
+                </button>
+              </div>
             </div>
-          </div>
+          </>
         )}
       </nav>
 

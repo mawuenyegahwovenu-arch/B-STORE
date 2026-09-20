@@ -24,3 +24,12 @@ createRoot(document.getElementById('root')).render(
     </BrowserRouter>
   </StrictMode>
 );
+// Register Service Worker for App Installation
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker
+      .register('/sw.js')
+      .then((reg) => console.log('PWA Ready:', reg.scope))
+      .catch((err) => console.error('PWA Setup Error:', err));
+  });
+}

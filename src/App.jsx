@@ -15,12 +15,14 @@ import ProductDetail from './pages/ProductDetail';
 import Wishlist from './pages/Wishlist';
 import CustomerProfile from './pages/CustomerProfile';
 import ResetPassword from './pages/ResetPassword';
+import { useLocation } from 'react-router-dom';
 
 function App() {
+  const location = useLocation();
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
       <Navbar />
-      <TickerBanner />
+      {location.pathname === '/' && <TickerBanner />}
       <div className="flex-1">
         <Routes>
           <Route path="/" element={<Home />} />

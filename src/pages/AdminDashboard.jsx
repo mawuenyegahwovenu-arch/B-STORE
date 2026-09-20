@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
+import NotificationBell from '../components/NotificationBell';
 
 export default function AdminDashboard() {
   const { isAdmin, user } = useAuth();
+  const navigate = useNavigate();
   const [tab, setTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [unifiedSearch, setUnifiedSearch] = useState('');
@@ -222,6 +224,7 @@ export default function AdminDashboard() {
     loadAll();
     alert('Product updated!');
   }
+
   async function toggleFeatured(product) {
     const newValue = !product.is_featured;
     await supabase
@@ -230,6 +233,7 @@ export default function AdminDashboard() {
       .eq('id', product.id);
     loadAll();
   }
+
   async function softDeleteProduct(id) {
     if (!confirm('Hide this product? (You can restore it later from the database)')) return;
     await supabase.from('products').update({ is_deleted: true, is_active: false }).eq('id', id);
@@ -349,7 +353,7 @@ export default function AdminDashboard() {
     alert('Products moved and category deleted!');
   }
 
-   async function updateOrderStatus(orderId, newStatus) {
+  async function updateOrderStatus(orderId, newStatus) {
     if (!confirm(`Mark this order as "${newStatus}"?`)) return;
 
     await supabase.from('orders').update({ order_status: newStatus }).eq('id', orderId);
@@ -502,7 +506,7 @@ export default function AdminDashboard() {
       case 'placed': return 'bg-amber-100 text-amber-800';
       case 'processing': return 'bg-blue-100 text-blue-800';
       case 'dispatched': return 'bg-indigo-100 text-indigo-800';
-      case 'delivered': return 'bg-purple-100 text-purple-800';
+      case 'delivered': return 'bg-green-100 text-green-800';
       case 'completed': return 'bg-green-100 text-green-800';
       case 'cancelled': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
@@ -571,7 +575,7 @@ export default function AdminDashboard() {
 
   const customersWithAction = dataLoading ? 0 : allCustomers.filter(cust => {
     const custOrders = orders.filter(o => o.customer_id === cust.id);
-    return custOrders.some(o => ['placed', 'processing', 'dispatched', 'delivered'].includes(o.order_status));
+    return custOrders.some(o => ['placed', 'processing', 'delivered'].includes(o.order_status));
   }).length;
 
   const filteredOrders = orders.filter(o => {
@@ -636,9 +640,14 @@ export default function AdminDashboard() {
     { id: 'add-product', icon: '➕', label: 'ADD PRODUCT', badge: 0 },
     { id: 'payouts', icon: '💰', label: 'PAYOUTS', badge: pendingPayoutsCount },
     { id: 'categories', icon: '📁', label: 'CATEGORIES', badge: 0 },
+    { id: 'exit', icon: '🚪', label: 'EXIT TO SHOP', badge: 0 },
   ];
 
   function handleTabClick(id) {
+    if (id === 'exit') {
+      navigate('/');
+      return;
+    }
     setTab(id);
     setSidebarOpen(false);
     setUnifiedSearch('');
@@ -669,7 +678,7 @@ export default function AdminDashboard() {
   function Badge({ count }) {
     if (!count) return null;
     return (
-      <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+      <span className="ml-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
         {count > 9 ? '9+' : count}
       </span>
     );
@@ -702,7 +711,7 @@ export default function AdminDashboard() {
               }`}
             >
               <span className="text-lg">{item.icon}</span>
-              <span className="flex-1 uppercase">{item.label}</span>
+              <span className="truncate uppercase">{item.label}</span>
               <Badge count={item.badge} />
             </button>
           ))}
@@ -714,10 +723,14 @@ export default function AdminDashboard() {
       </aside>
 
       <div className="flex-1 min-w-0">
-        <div className="md:hidden bg-indigo-900 text-white px-4 py-3 flex items-center justify-between sticky top-0 z-30">
-          <button onClick={() => setSidebarOpen(true)} className="text-2xl leading-none">☰</button>
-          <h1 className="font-bold text-sm uppercase">ADMIN DASHBOARD</h1>
-          <div className="w-6"></div>
+        {/* MOBILE HEADER — evenly spaced */}
+        <div className="md:hidden bg-indigo-900 text-white px-3 py-3 flex items-center justify-between sticky top-0 z-30">
+          <button onClick={() => setSidebarOpen(true)} className="text-2xl leading-none w-9 h-9 flex items-center justify-center">☰</button>
+          <span className="font-bold text-xs uppercase tracking-wide">ADMIN</span>
+          <div className="w-9 h-9 flex items-center justify-center">
+            <NotificationBell />
+          </div>
+          <Link to="/" className="w-9 h-9 flex items-center justify-center text-lg leading-none">🏠</Link>
         </div>
 
         <div className="p-3 sm:p-6">
@@ -905,9 +918,7 @@ export default function AdminDashboard() {
                   { id: 'all', label: 'ALL' },
                   { id: 'placed', label: 'PLACED' },
                   { id: 'processing', label: 'PROCESSING' },
-                  { id: 'dispatched', label: 'DISPATCHED' },
                   { id: 'delivered', label: 'DELIVERED' },
-                  { id: 'completed', label: 'COMPLETED' },
                   { id: 'cancelled', label: 'CANCELLED' },
                 ].map(f => {
                   const count = f.id === 'all' ? orders.length : orders.filter(o => o.order_status === f.id).length;
@@ -962,10 +973,7 @@ export default function AdminDashboard() {
                       <div className="font-bold text-indigo-600 text-sm">GHS {Number(order.total).toFixed(2)}</div>
                     </div>
                     <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
-                      {order.order_status === 'placed' && <button onClick={() => updateOrderStatus(order.id, 'processing')} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">PROCESSING</button>}
-                      {order.order_status === 'processing' && <button onClick={() => updateOrderStatus(order.id, 'dispatched')} className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">DISPATCHED</button>}
-                      {order.order_status === 'dispatched' && <button onClick={() => updateOrderStatus(order.id, 'delivered')} className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">DELIVERED</button>}
-                      {order.order_status === 'delivered' && <button onClick={() => updateOrderStatus(order.id, 'completed')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">COMPLETED</button>}
+                     {order.order_status === 'processing' && <button onClick={() => updateOrderStatus(order.id, 'delivered')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">MARK DELIVERED</button>}
                     </div>
                   </div>
                 ))
@@ -983,7 +991,7 @@ export default function AdminDashboard() {
                 filteredCustomers.map(cust => {
                   const custOrders = orders.filter(o => o.customer_id === cust.id);
                   const newCount = custOrders.filter(o => o.order_status === 'placed').length;
-                  const inProgressCount = custOrders.filter(o => ['processing', 'dispatched'].includes(o.order_status)).length;
+                  const inProgressCount = custOrders.filter(o => o.order_status === 'processing').length;
                   const readyCount = custOrders.filter(o => o.order_status === 'delivered').length;
                   return (
                     <Link key={cust.id} to={`/admin/customer/${cust.id}`} className="block bg-white border rounded-xl p-4 hover:shadow-lg transition">
@@ -1093,10 +1101,10 @@ export default function AdminDashboard() {
                         <p className="text-xs text-gray-500">Seller: {p.seller_name}</p>
                       </div>
                     </div>
-                               <div className="flex gap-2 self-center flex-wrap">
+                    <div className="flex gap-2 self-center flex-wrap">
                       <button
                         onClick={() => toggleFeatured(p)}
-                        className={`px-3 py-1.5 rounded text-xs font-semibold uppercase ${
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
                           p.is_featured
                             ? 'bg-amber-500 hover:bg-amber-600 text-white'
                             : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
