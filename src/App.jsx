@@ -16,9 +16,13 @@ import Wishlist from './pages/Wishlist';
 import CustomerProfile from './pages/CustomerProfile';
 import ResetPassword from './pages/ResetPassword';
 import { useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
 
 function App() {
   const location = useLocation();
+  useEffect(() => {
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}, [location.pathname]);
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
       <Navbar />

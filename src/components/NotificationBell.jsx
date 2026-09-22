@@ -1,18 +1,39 @@
 import { useEffect, useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 
 export default function NotificationBell() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const dropdownRef = useRef(null);
 
   useEffect(() => {
     if (!user) return;
+
     loadNotifications();
-    const interval = setInterval(loadNotifications, 30000);
-    return () => clearInterval(interval);
+
+    const channel = supabase
+      .channel(`notifications-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          setNotifications(prev => [payload.new, ...prev].slice(0, 20));
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -37,17 +58,25 @@ export default function NotificationBell() {
   }
 
   async function markAsRead(id) {
+    setNotifications(prev =>
+      prev.map(n => (n.id === id ? { ...n, is_read: true } : n))
+    );
     await supabase.from('notifications').update({ is_read: true }).eq('id', id);
-    loadNotifications();
   }
 
   async function markAllRead() {
     const unreadIds = notifications.filter(n => !n.is_read).map(n => n.id);
-    if (unreadIds.length === 0) return;
-    for (const id of unreadIds) {
-      await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+    if (!unreadIds.length) return;
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+    await supabase.from('notifications').update({ is_read: true }).in('id', unreadIds);
+  }
+
+  function handleNotificationClick(n) {
+    if (!n.is_read) markAsRead(n.id);
+    if (n.link) {
+      setOpen(false);
+      navigate(n.link);
     }
-    loadNotifications();
   }
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
@@ -70,15 +99,12 @@ export default function NotificationBell() {
 
       {open && (
         <>
-          {/* Mobile backdrop */}
           <div
             className="fixed inset-0 bg-black bg-opacity-40 z-40 md:hidden"
             onClick={() => setOpen(false)}
           />
 
-          {/* Panel - full width on mobile, compact on desktop */}
           <div className="fixed md:absolute top-16 md:top-auto right-2 left-2 md:left-auto md:right-0 md:mt-2 md:w-96 bg-white text-gray-800 rounded-xl shadow-2xl border z-50 max-h-[80vh] md:max-h-96 flex flex-col">
-            {/* Header */}
             <div className="flex justify-between items-center px-4 py-3 border-b">
               <h3 className="font-bold text-sm">Notifications</h3>
               <div className="flex items-center gap-2">
@@ -96,7 +122,6 @@ export default function NotificationBell() {
               </div>
             </div>
 
-            {/* Body */}
             <div className="overflow-y-auto flex-1">
               {notifications.length === 0 ? (
                 <p className="text-center text-gray-500 text-sm py-8">No notifications yet.</p>
@@ -105,7 +130,7 @@ export default function NotificationBell() {
                   {notifications.map(n => (
                     <div
                       key={n.id}
-                      onClick={() => !n.is_read && markAsRead(n.id)}
+                      onClick={() => handleNotificationClick(n)}
                       className={`px-4 py-3 text-sm cursor-pointer hover:bg-gray-50 ${!n.is_read ? 'bg-indigo-50' : ''}`}
                     >
                       <p className="font-semibold text-gray-800 break-words">{n.title}</p>

@@ -57,11 +57,11 @@ export default function Checkout() {
 
   function validateBeforePayment() {
     if (!phone.trim()) {
-      setError('Phone number is required.');
+      setError('Please enter your phone number.');
       return false;
     }
     if (!isMultiSeller && !selectedSellerLocation) {
-      setError('Please select a delivery location.');
+      setError('Please select a delivery point.');
       return false;
     }
     return true;
@@ -181,7 +181,6 @@ export default function Checkout() {
       setLoading(false);
       return;
     }
-    // ===== SEND EMAILS =====
 
     // 1. Order Confirmation → Customer
     const orderSummaryString = cart
@@ -261,6 +260,7 @@ export default function Checkout() {
         sellerCount: Object.keys(bySellerForEmail).length,
       });
     }
+
     for (const item of cart) {
       const { data: prod } = await supabase
         .from('products')
@@ -302,6 +302,16 @@ export default function Checkout() {
       });
     }
 
+    // CUSTOMER notification — order placed
+    await supabase.from('notifications').insert({
+      user_id: user.id,
+      title: '✅ Order Placed',
+      message: `Your order #${orderData.id.slice(0, 8)} has been placed. Total: GHS ${totalAmount.toFixed(2)}`,
+      type: 'order',
+      related_order_id: orderData.id,
+      link: `/order/${orderData.id}`,
+    });
+
     clearCart();
     navigate(`/order-confirmation/${orderData.id}`);
   }
@@ -333,51 +343,60 @@ export default function Checkout() {
       </div>
 
       {isMultiSeller && (
-        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 mb-4 text-sm">
-          <p className="font-bold text-amber-800 mb-1 uppercase">📦 MULTI-SELLER ORDER</p>
-          <p className="text-amber-700">
-            Multi-seller order — deliver all items to the customer's selected pickup point.
-          </p>
-          <div className="mt-3 bg-white rounded-lg p-3 border border-amber-200">
-            <p className="text-xs text-gray-500 mb-1 uppercase">PICKUP POINT:</p>
-            <p className="font-bold text-gray-800">🏫 HTU ENTRANCE</p>
-            <p className="text-xs text-gray-500 mt-1">📅 SUNDAY, 5PM – 6PM</p>
+        <div className="bg-amber-50 border-2 border-amber-400 rounded-xl p-4 mb-4 text-sm">
+          <p className="font-bold text-amber-900 mb-2 uppercase">📦 MULTI-SELLER ORDER</p>
+          <div className="bg-white rounded-lg p-3 border-2 border-amber-300">
+            <p className="text-xs text-gray-600 mb-1 font-semibold uppercase">📍 PICKUP POINT</p>
+            <p className="font-bold text-gray-900 text-base">🏫 HTU ENTRANCE</p>
+            <p className="text-xs text-gray-600 mt-1 font-semibold">📅 SUNDAY, 5PM – 6PM</p>
           </div>
-          <p className="text-xs text-amber-700 mt-3">
+          <p className="text-xs text-amber-800 mt-3 font-medium">
             🔔 You will be notified when your order is ready.
           </p>
         </div>
       )}
 
       {!isMultiSeller && sellerLocations.location_1 && (
-        <div className="bg-blue-50 border border-blue-300 rounded-xl p-4 mb-4 text-sm">
-          <p className="font-bold text-blue-800 mb-2 uppercase">📍 CHOOSE YOUR DELIVERY POINT</p>
-          <p className="text-xs text-blue-700 mb-3">
-            The seller will message you when your order is ready.
+        <div className="bg-blue-50 border-2 border-blue-400 rounded-xl p-4 mb-4 text-sm">
+          <p className="font-bold text-blue-900 mb-1 uppercase">📍 CHOOSE YOUR DELIVERY POINT</p>
+          <p className="text-xs text-blue-700 mb-3 font-medium">
+            👇 Tap one below. The seller will message you when your order is ready.
           </p>
           <div className="space-y-2">
             <button
               type="button"
               onClick={() => setSelectedSellerLocation(sellerLocations.location_1)}
-              className={`w-full text-left p-3 rounded-lg border-2 transition ${
+              className={`w-full text-left p-4 rounded-lg border-2 transition flex items-center justify-between ${
                 selectedSellerLocation === sellerLocations.location_1
-                  ? 'border-indigo-600 bg-indigo-50'
-                  : 'border-gray-200 bg-white hover:border-indigo-300'
+                  ? 'border-indigo-600 bg-indigo-100 shadow-md'
+                  : 'border-gray-300 bg-white hover:border-indigo-400 hover:bg-indigo-50'
               }`}
             >
-              <p className="font-bold text-sm text-gray-800">{sellerLocations.location_1}</p>
+              <div>
+                <p className="font-bold text-sm text-gray-900">{sellerLocations.location_1}</p>
+                <p className="text-[10px] text-gray-500 uppercase mt-0.5">
+                  {selectedSellerLocation === sellerLocations.location_1 ? '✅ SELECTED' : 'TAP TO SELECT'}
+                </p>
+              </div>
+              <span className="text-2xl">{selectedSellerLocation === sellerLocations.location_1 ? '✅' : '⬜'}</span>
             </button>
             {sellerLocations.location_2 && (
               <button
                 type="button"
                 onClick={() => setSelectedSellerLocation(sellerLocations.location_2)}
-                className={`w-full text-left p-3 rounded-lg border-2 transition ${
+                className={`w-full text-left p-4 rounded-lg border-2 transition flex items-center justify-between ${
                   selectedSellerLocation === sellerLocations.location_2
-                    ? 'border-indigo-600 bg-indigo-50'
-                    : 'border-gray-200 bg-white hover:border-indigo-300'
+                    ? 'border-indigo-600 bg-indigo-100 shadow-md'
+                    : 'border-gray-300 bg-white hover:border-indigo-400 hover:bg-indigo-50'
                 }`}
               >
-                <p className="font-bold text-sm text-gray-800">{sellerLocations.location_2}</p>
+                <div>
+                  <p className="font-bold text-sm text-gray-900">{sellerLocations.location_2}</p>
+                  <p className="text-[10px] text-gray-500 uppercase mt-0.5">
+                    {selectedSellerLocation === sellerLocations.location_2 ? '✅ SELECTED' : 'TAP TO SELECT'}
+                  </p>
+                </div>
+                <span className="text-2xl">{selectedSellerLocation === sellerLocations.location_2 ? '✅' : '⬜'}</span>
               </button>
             )}
           </div>
@@ -386,65 +405,82 @@ export default function Checkout() {
 
       <div className="bg-white rounded-xl shadow p-4 mb-4">
         <h2 className="font-bold text-sm text-gray-700 mb-3 uppercase">CONTACT DETAILS</h2>
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">PHONE NUMBER (MOMO / CONTACT)</label>
+            <label className="block text-xs font-bold text-gray-800 mb-1 uppercase">
+              📞 PHONE NUMBER <span className="text-red-600">*</span>
+            </label>
+            <p className="text-[11px] text-gray-500 mb-2">We'll use this to reach you (MoMo or call).</p>
             <input
               type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="059XXXXXXX"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="e.g. 0591234567"
+              className="w-full px-4 py-3 border-2 border-indigo-300 rounded-lg text-base font-medium placeholder-gray-400 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-200 bg-indigo-50/30"
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1 uppercase">ADDITIONAL INFO (OPTIONAL)</label>
+            <label className="block text-xs font-bold text-gray-800 mb-1 uppercase">
+              ✏️ ADDITIONAL INFO <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <p className="text-[11px] text-gray-500 mb-2">Anything sellers should know (color, size, timing).</p>
             <textarea
-              rows={2}
+              rows={3}
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="Anything sellers should know"
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="Type here..."
+              className="w-full px-4 py-3 border-2 border-indigo-300 rounded-lg text-sm placeholder-gray-400 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-200 bg-indigo-50/30"
             />
           </div>
         </div>
       </div>
 
       <div className="bg-white rounded-xl shadow p-4 mb-4">
-        <h2 className="font-bold text-sm text-gray-700 mb-3 uppercase">PAYMENT METHOD</h2>
-        <div className="space-y-2">
+        <h2 className="font-bold text-sm text-gray-700 mb-1 uppercase">PAYMENT METHOD</h2>
+        <p className="text-[11px] text-gray-500 mb-3">👇 Tap one to choose how you want to pay.</p>
+        <div className="space-y-3">
           <button
             type="button"
             onClick={() => setPaymentMethod('pay_on_delivery')}
-            className={`w-full text-left p-3 rounded-lg border-2 transition ${
-              paymentMethod === 'pay_on_delivery' ? 'border-indigo-600 bg-indigo-50' : 'border-gray-200 bg-white'
+            className={`w-full text-left p-4 rounded-lg border-2 transition flex items-center justify-between ${
+              paymentMethod === 'pay_on_delivery'
+                ? 'border-indigo-600 bg-indigo-100 shadow-md'
+                : 'border-gray-300 bg-white hover:border-indigo-400'
             }`}
           >
-            <p className="font-bold text-sm">💵 PAY ON DELIVERY</p>
-            <p className="text-xs text-gray-500">Pay when you receive your items</p>
+            <div>
+              <p className="font-bold text-sm text-gray-900">💵 PAY ON DELIVERY</p>
+              <p className="text-xs text-gray-600 mt-0.5">Pay when you receive your items</p>
+            </div>
+            <span className="text-2xl">{paymentMethod === 'pay_on_delivery' ? '✅' : '⬜'}</span>
           </button>
 
           <button
             type="button"
             onClick={() => { setPaymentMethod('paystack'); handlePaystackPayment(); }}
-            className={`w-full text-left p-3 rounded-lg border-2 transition ${
-              paymentMethod === 'paystack' ? 'border-indigo-600 bg-indigo-50' : 'border-sky-200 bg-sky-50'
+            className={`w-full text-left p-4 rounded-lg border-2 transition flex items-center justify-between ${
+              paymentMethod === 'paystack'
+                ? 'border-indigo-600 bg-indigo-100 shadow-md'
+                : 'border-sky-300 bg-sky-50 hover:border-sky-500'
             }`}
           >
-            <p className="font-bold text-sm text-sky-700">💳 PAY ONLINE (CARD/MOMO)</p>
-            <p className="text-xs text-sky-500">Secure payment via Paystack</p>
+            <div>
+              <p className="font-bold text-sm text-sky-800">💳 PAY ONLINE (CARD / MOMO)</p>
+              <p className="text-xs text-sky-600 mt-0.5">Secure payment via Paystack</p>
+            </div>
+            <span className="text-2xl">{paymentMethod === 'paystack' ? '✅' : '⬜'}</span>
           </button>
         </div>
 
         {paymentMethod === 'pay_on_delivery' && (
-          <div className="mt-4 bg-gray-50 rounded-lg p-3 text-xs">
-            <p className="text-gray-600 mb-1">Optional: You can prepay to:</p>
-            <p className="font-bold text-indigo-900">{MOMO_NUMBER}</p>
+          <div className="mt-4 bg-amber-50 border-2 border-amber-300 rounded-lg p-3 text-xs">
+            <p className="text-amber-800 mb-1 font-semibold">💡 OPTIONAL — You can prepay to:</p>
+            <p className="font-bold text-indigo-900 text-base">{MOMO_NUMBER}</p>
             <p className="text-gray-700">Name: <strong>{MOMO_NAME}</strong></p>
             <button
               type="button"
               onClick={copyNumber}
-              className="mt-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-semibold px-3 py-1 rounded text-xs uppercase"
+              className="mt-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2 rounded-lg text-xs uppercase"
             >
               {copied ? '✅ COPIED!' : '📋 COPY NUMBER'}
             </button>
@@ -453,8 +489,8 @@ export default function Checkout() {
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg mb-4">
-          {error}
+        <div className="bg-red-50 border-2 border-red-300 text-red-700 text-sm px-4 py-3 rounded-lg mb-4 font-medium">
+          ⚠️ {error}
         </div>
       )}
 
@@ -462,14 +498,14 @@ export default function Checkout() {
         <button
           onClick={handlePlaceOrder}
           disabled={loading}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-lg text-sm disabled:opacity-60 uppercase"
+          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-lg text-base disabled:opacity-60 uppercase shadow-lg"
         >
           {loading ? 'PLACING ORDER...' : `PLACE ORDER — GHS ${totalAmount.toFixed(2)}`}
         </button>
       )}
 
       {paymentMethod === 'paystack' && (
-        <div className="bg-sky-50 border border-sky-300 rounded-xl p-4 text-center text-sm text-sky-700">
+        <div className="bg-sky-50 border-2 border-sky-300 rounded-xl p-4 text-center text-sm text-sky-800 font-medium">
           👆 Click "PAY ONLINE (CARD/MOMO)" above to complete payment
         </div>
       )}

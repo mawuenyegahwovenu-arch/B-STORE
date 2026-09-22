@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import NotificationBell from '../components/NotificationBell';
 
 export default function AdminDashboard() {
-  const { isAdmin, user } = useAuth();
+  const { isAdmin, user, userData } = useAuth();
   const navigate = useNavigate();
   const [tab, setTab] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -35,6 +35,18 @@ export default function AdminDashboard() {
   const [sellerFilter, setSellerFilter] = useState('all');
   const [viewingSeller, setViewingSeller] = useState(null);
 
+  // ===== SETTINGS STATE =====
+  const [settingsSearch, setSettingsSearch] = useState('');
+  const [settingsRoleFilter, setSettingsRoleFilter] = useState('all');
+  const [allUsersList, setAllUsersList] = useState([]);
+  const [editingUser, setEditingUser] = useState(null);
+  const [editingUserSeller, setEditingUserSeller] = useState(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [ownPassword, setOwnPassword] = useState('');
+  const [ownName, setOwnName] = useState(userData?.full_name || '');
+  const [ownPhone, setOwnPhone] = useState(userData?.phone || '');
+  const [settingsMsg, setSettingsMsg] = useState('');
+
   const [stats, setStats] = useState({
     totalProducts: 0,
     totalOrders: 0,
@@ -58,22 +70,37 @@ export default function AdminDashboard() {
     if (isAdmin) loadAll();
   }, [isAdmin]);
 
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [tab]);
+
+  useEffect(() => {
+    if (userData) {
+      setOwnName(userData.full_name || '');
+      setOwnPhone(userData.phone || '');
+    }
+  }, [userData]);
+
   async function loadAll() {
     setDataLoading(true);
 
-    const [sellersRes, productsRes, catsRes, ordersRes, allProductsRes, approvedSellersRes, payoutsRes, walletsRes, allSellersRes, customersRes, orderItemsRes] = await Promise.all([
+    const [sellersRes, productsRes, catsRes, ordersRes, approvedSellersRes, payoutsRes, walletsRes, allSellersRes, customersRes, orderItemsRes, allProdsRes, allUsersRes] = await Promise.all([
       supabase.from('sellers').select('*').eq('status', 'pending'),
       supabase.from('products').select('*').eq('approval_status', 'pending').or('is_deleted.is.null,is_deleted.eq.false'),
       supabase.from('categories').select('*').order('name'),
       supabase.from('orders').select('*').order('created_at', { ascending: false }),
-      supabase.from('products').select('id').or('is_deleted.is.null,is_deleted.eq.false'),
       supabase.from('sellers').select('user_id, full_name').eq('status', 'approved'),
       supabase.from('payouts').select('*').order('requested_at', { ascending: false }),
       supabase.from('wallets').select('*'),
       supabase.from('sellers').select('*').order('created_at', { ascending: false }),
       supabase.from('users').select('*').eq('role', 'customer').order('created_at', { ascending: false }),
       supabase.from('order_items').select('*'),
+      supabase.from('products').select('*').or('is_deleted.is.null,is_deleted.eq.false').order('created_at', { ascending: false }),
+      supabase.from('users').select('*').order('created_at', { ascending: false }),
     ]);
+
+    const allProds = allProdsRes.data || [];
+    const orderItems = orderItemsRes.data || [];
 
     setPendingSellers(sellersRes.data || []);
     setPendingProducts(productsRes.data || []);
@@ -83,22 +110,20 @@ export default function AdminDashboard() {
     setWallets(walletsRes.data || []);
     setAllSellers(allSellersRes.data || []);
     setAllCustomers(customersRes?.data || []);
-    setAllOrderItems(orderItemsRes.data || []);
+    setAllOrderItems(orderItems);
+    setAllProducts(allProds);
+    setAllUsersList(allUsersRes.data || []);
 
-    const { data: allProds } = await supabase
-      .from('products')
-      .select('*')
-      .or('is_deleted.is.null,is_deleted.eq.false')
-      .order('created_at', { ascending: false });
-    setAllProducts(allProds || []);
+    const itemsByOrder = {};
+    orderItems.forEach(item => {
+      if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
+      itemsByOrder[item.order_id].push(item);
+    });
 
     const ordersList = ordersRes.data || [];
-    const enriched = await Promise.all(ordersList.map(async (order) => {
-      const { data: items } = await supabase
-        .from('order_items')
-        .select('*')
-        .eq('order_id', order.id);
-      return { ...order, items: items || [] };
+    const enriched = ordersList.map(order => ({
+      ...order,
+      items: itemsByOrder[order.id] || [],
     }));
 
     setOrders(enriched);
@@ -109,7 +134,7 @@ export default function AdminDashboard() {
       .reduce((sum, o) => sum + Number(o.total || 0), 0);
 
     setStats({
-      totalProducts: (allProductsRes.data || []).length,
+      totalProducts: allProds.length,
       totalOrders: ordersList.length,
       pendingOrders: pending,
       totalRevenue: revenue,
@@ -235,8 +260,14 @@ export default function AdminDashboard() {
   }
 
   async function softDeleteProduct(id) {
-    if (!confirm('Hide this product? (You can restore it later from the database)')) return;
+    if (!confirm('Hide this product? (You can restore it later from the HIDDEN filter)')) return;
     await supabase.from('products').update({ is_deleted: true, is_active: false }).eq('id', id);
+    loadAll();
+  }
+
+  async function restoreProduct(id) {
+    if (!confirm('Restore this product and make it live again?')) return;
+    await supabase.from('products').update({ is_deleted: false, is_active: true }).eq('id', id);
     loadAll();
   }
 
@@ -247,7 +278,17 @@ export default function AdminDashboard() {
       .update({ status: 'approved', approved_at: new Date().toISOString() })
       .eq('id', seller.id);
     await supabase.from('users').update({ role: 'seller' }).eq('id', seller.user_id);
-    await supabase.from('wallets').insert({ seller_id: seller.user_id });
+
+    const { data: existingWallet } = await supabase
+      .from('wallets')
+      .select('id')
+      .eq('seller_id', seller.user_id)
+      .maybeSingle();
+
+    if (!existingWallet) {
+      await supabase.from('wallets').insert({ seller_id: seller.user_id });
+    }
+
     loadAll();
     alert('Seller approved!');
   }
@@ -366,7 +407,7 @@ export default function AdminDashboard() {
 
       const { data: orderData } = await supabase
         .from('orders')
-        .select('customer_email, customer_name, consolidation_point, selected_delivery_point, total')
+        .select('customer_id, customer_email, customer_name, consolidation_point, selected_delivery_point, total')
         .eq('id', orderId)
         .single();
 
@@ -385,6 +426,51 @@ export default function AdminDashboard() {
             total: Number(orderData.total).toFixed(2),
           }),
         }).catch(err => console.error('Order ready email failed:', err));
+      }
+
+      if (orderData?.customer_id) {
+        await supabase.from('notifications').insert({
+          user_id: orderData.customer_id,
+          title: '✅ Order Delivered',
+          message: `Your order #${orderId.slice(0, 8)} is ready at ${orderData.consolidation_point || orderData.selected_delivery_point || 'HTU ENTRANCE'}.`,
+          type: 'order',
+          related_order_id: orderId,
+          link: `/order/${orderId}`,
+        });
+      }
+    } else if (newStatus === 'processing') {
+      const { data: orderData } = await supabase
+        .from('orders')
+        .select('customer_id')
+        .eq('id', orderId)
+        .single();
+
+      if (orderData?.customer_id) {
+        await supabase.from('notifications').insert({
+          user_id: orderData.customer_id,
+          title: '🔄 Order Processing',
+          message: `Your order #${orderId.slice(0, 8)} is being prepared.`,
+          type: 'order',
+          related_order_id: orderId,
+          link: `/order/${orderId}`,
+        });
+      }
+    } else if (newStatus === 'cancelled') {
+      const { data: orderData } = await supabase
+        .from('orders')
+        .select('customer_id')
+        .eq('id', orderId)
+        .single();
+
+      if (orderData?.customer_id) {
+        await supabase.from('notifications').insert({
+          user_id: orderData.customer_id,
+          title: '❌ Order Cancelled',
+          message: `Your order #${orderId.slice(0, 8)} has been cancelled.`,
+          type: 'order',
+          related_order_id: orderId,
+          link: `/order/${orderId}`,
+        });
       }
     }
 
@@ -430,6 +516,14 @@ export default function AdminDashboard() {
       .from('payouts')
       .update({ status: 'approved', approved_at: new Date().toISOString() })
       .eq('id', payout.id);
+
+    await supabase.from('notifications').insert({
+      user_id: payout.seller_id,
+      title: '✅ Payout Approved',
+      message: `Your payout request of GHS ${Number(payout.amount).toFixed(2)} has been approved. Payment coming soon.`,
+      type: 'payout',
+    });
+
     loadAll();
   }
 
@@ -444,7 +538,7 @@ export default function AdminDashboard() {
       .from('wallets')
       .select('*')
       .eq('seller_id', payout.seller_id)
-      .single();
+      .maybeSingle();
 
     if (wallet) {
       await supabase
@@ -456,12 +550,30 @@ export default function AdminDashboard() {
         .eq('seller_id', payout.seller_id);
     }
 
+    await supabase.from('notifications').insert({
+      user_id: payout.seller_id,
+      title: '💸 Payout Paid',
+      message: `GHS ${Number(payout.amount).toFixed(2)} has been sent to your MoMo.`,
+      type: 'payout',
+    });
+
     loadAll();
     alert('Payout marked as paid!');
   }
 
   async function paySellerDirect(seller, amount) {
     if (!confirm(`Mark GHS ${amount.toFixed(2)} as PAID to ${seller.full_name}? Make sure you've sent the MoMo first.`)) return;
+
+    const { data: wallet } = await supabase
+      .from('wallets')
+      .select('*')
+      .eq('seller_id', seller.user_id)
+      .maybeSingle();
+
+    if (!wallet) {
+      alert('No wallet found for this seller. Create one first.');
+      return;
+    }
 
     const { error } = await supabase.from('payouts').insert({
       seller_id: seller.user_id,
@@ -475,25 +587,157 @@ export default function AdminDashboard() {
       return;
     }
 
-    const { data: wallet } = await supabase
+    await supabase
       .from('wallets')
-      .select('*')
-      .eq('seller_id', seller.user_id)
-      .maybeSingle();
+      .update({
+        available_balance: Math.max(0, Number(wallet.available_balance || 0) - amount),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('seller_id', seller.user_id);
 
-    if (wallet) {
-      await supabase
-        .from('wallets')
-        .update({
-          available_balance: Math.max(0, Number(wallet.available_balance || 0) - amount),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('seller_id', seller.user_id);
-    }
+    await supabase.from('notifications').insert({
+      user_id: seller.user_id,
+      title: '💸 Payment Sent',
+      message: `GHS ${amount.toFixed(2)} has been sent to your MoMo.`,
+      type: 'payout',
+    });
 
     setViewingSeller(null);
     loadAll();
     alert('✅ Payment recorded!');
+  }
+
+  // ===== SETTINGS FUNCTIONS =====
+
+  async function saveOwnAccount() {
+    setSettingsMsg('');
+    if (!ownName.trim()) { setSettingsMsg('Name is required.'); return; }
+
+    const { error } = await supabase
+      .from('users')
+      .update({ full_name: ownName.trim(), phone: ownPhone.trim() })
+      .eq('id', user.id);
+
+    if (error) { setSettingsMsg('Error: ' + error.message); return; }
+    setSettingsMsg('✅ Your account updated. Refresh to see changes.');
+  }
+
+  async function changeOwnPassword() {
+    setSettingsMsg('');
+    if (ownPassword.length < 6) { setSettingsMsg('Password must be at least 6 characters.'); return; }
+
+    const { error } = await supabase.auth.updateUser({ password: ownPassword });
+    if (error) { setSettingsMsg('Error: ' + error.message); return; }
+    setOwnPassword('');
+    setSettingsMsg('✅ Your password changed.');
+  }
+
+  async function openEditUser(u) {
+    setEditingUser({ ...u });
+    setNewPassword('');
+    if (u.role === 'seller') {
+      const { data: sellerRow } = await supabase
+        .from('sellers')
+        .select('*')
+        .eq('user_id', u.id)
+        .maybeSingle();
+      setEditingUserSeller(sellerRow || {
+        user_id: u.id,
+        full_name: u.full_name,
+        phone: u.phone,
+        whatsapp: '',
+        region: '',
+        address: '',
+        location_1: '',
+        location_2: '',
+        status: 'approved',
+      });
+    } else {
+      setEditingUserSeller(null);
+    }
+  }
+
+  async function saveUserEdit() {
+    if (!editingUser) return;
+    setSettingsMsg('');
+
+    const { error } = await supabase
+      .from('users')
+      .update({
+        full_name: editingUser.full_name,
+        phone: editingUser.phone,
+        role: editingUser.role,
+        is_active: editingUser.is_active,
+      })
+      .eq('id', editingUser.id);
+
+    if (error) { setSettingsMsg('Error: ' + error.message); return; }
+
+    if (editingUser.role === 'seller' && editingUserSeller) {
+      const { data: existing } = await supabase
+        .from('sellers')
+        .select('id')
+        .eq('user_id', editingUser.id)
+        .maybeSingle();
+
+      const sellerPayload = {
+        user_id: editingUser.id,
+        full_name: editingUser.full_name,
+        phone: editingUser.phone,
+        whatsapp: editingUserSeller.whatsapp || '',
+        region: editingUserSeller.region || '',
+        address: editingUserSeller.address || '',
+        location_1: editingUserSeller.location_1 || '',
+        location_2: editingUserSeller.location_2 || '',
+        status: editingUserSeller.status || 'approved',
+      };
+
+      if (existing) {
+        await supabase.from('sellers').update(sellerPayload).eq('user_id', editingUser.id);
+      } else {
+        await supabase.from('sellers').insert(sellerPayload);
+      }
+    }
+
+    setSettingsMsg('✅ User updated.');
+    setEditingUser(null);
+    setEditingUserSeller(null);
+    loadAll();
+  }
+
+  async function changeUserPassword() {
+    if (!editingUser || !newPassword) return;
+    if (newPassword.length < 6) { alert('Password must be at least 6 characters.'); return; }
+    if (!confirm(`Change password for ${editingUser.full_name}?`)) return;
+
+    const { error } = await supabase.rpc('admin_set_password', {
+      target_user_id: editingUser.id,
+      new_password: newPassword,
+    });
+
+    if (error) { alert('Error: ' + error.message); return; }
+    setNewPassword('');
+    alert('✅ Password changed.');
+  }
+
+  async function deleteUserAccount() {
+    if (!editingUser) return;
+    if (editingUser.id === user.id) {
+      alert("You can't delete your own account.");
+      return;
+    }
+    if (!confirm(`DELETE ${editingUser.full_name} permanently? This removes their profile.`)) return;
+
+    await supabase.from('sellers').delete().eq('user_id', editingUser.id);
+    await supabase.from('wallets').delete().eq('seller_id', editingUser.id);
+    const { error } = await supabase.from('users').delete().eq('id', editingUser.id);
+
+    if (error) { alert('Error: ' + error.message); return; }
+
+    alert('✅ User deleted from database.');
+    setEditingUser(null);
+    setEditingUserSeller(null);
+    loadAll();
   }
 
   function findSellerName(sellerId) {
@@ -628,6 +872,17 @@ export default function AdminDashboard() {
     return true;
   });
 
+  const filteredUsers = allUsersList.filter(u => {
+    if (settingsRoleFilter !== 'all' && u.role !== settingsRoleFilter) return false;
+    if (!settingsSearch.trim()) return true;
+    const q = settingsSearch.toLowerCase();
+    return (
+      (u.full_name || '').toLowerCase().includes(q) ||
+      (u.phone || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q)
+    );
+  });
+
   const sidebarMenu = [
     { id: 'overview', icon: '📊', label: 'OVERVIEW', badge: 0 },
     { id: 'sellers-money', icon: '💰', label: 'SELLERS MONEY', badge: 0 },
@@ -640,6 +895,7 @@ export default function AdminDashboard() {
     { id: 'add-product', icon: '➕', label: 'ADD PRODUCT', badge: 0 },
     { id: 'payouts', icon: '💰', label: 'PAYOUTS', badge: pendingPayoutsCount },
     { id: 'categories', icon: '📁', label: 'CATEGORIES', badge: 0 },
+    { id: 'settings', icon: '⚙️', label: 'SETTINGS', badge: 0 },
     { id: 'exit', icon: '🚪', label: 'EXIT TO SHOP', badge: 0 },
   ];
 
@@ -654,6 +910,8 @@ export default function AdminDashboard() {
     setOrderSearch('');
     setCustomerSearch('');
     setProductSearch('');
+    setSettingsSearch('');
+    setSettingsMsg('');
   }
 
   function handleUnifiedSearch(value) {
@@ -661,6 +919,7 @@ export default function AdminDashboard() {
     if (tab === 'orders') setOrderSearch(value);
     else if (tab === 'customers') setCustomerSearch(value);
     else if (tab === 'all-products') setProductSearch(value);
+    else if (tab === 'settings') setSettingsSearch(value);
   }
 
   const searchPlaceholder = (() => {
@@ -671,6 +930,7 @@ export default function AdminDashboard() {
       case 'all-sellers': return '🔍 SEARCH IN ALL SELLERS...';
       case 'sellers-money': return '🔍 SEARCH IN SELLERS MONEY...';
       case 'payouts': return '🔍 SEARCH IN PAYOUTS...';
+      case 'settings': return '🔍 SEARCH USERS (NAME / EMAIL / PHONE)...';
       default: return '🔍 SEARCH...';
     }
   })();
@@ -723,7 +983,6 @@ export default function AdminDashboard() {
       </aside>
 
       <div className="flex-1 min-w-0">
-        {/* MOBILE HEADER — evenly spaced */}
         <div className="md:hidden bg-indigo-900 text-white px-3 py-3 flex items-center justify-between sticky top-0 z-30">
           <button onClick={() => setSidebarOpen(true)} className="text-2xl leading-none w-9 h-9 flex items-center justify-center">☰</button>
           <span className="font-bold text-xs uppercase tracking-wide">ADMIN</span>
@@ -736,15 +995,17 @@ export default function AdminDashboard() {
         <div className="p-3 sm:p-6">
           <h1 className="hidden md:block text-2xl font-bold text-indigo-900 mb-6 uppercase">ADMIN DASHBOARD</h1>
 
-          <div className="mb-4">
-            <input
-              type="text"
-              value={unifiedSearch}
-              onChange={(e) => handleUnifiedSearch(e.target.value)}
-              placeholder={searchPlaceholder}
-              className="w-full px-4 py-3 border-2 border-indigo-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 uppercase"
-            />
-          </div>
+          {tab !== 'settings' && (
+            <div className="mb-4">
+              <input
+                type="text"
+                value={unifiedSearch}
+                onChange={(e) => handleUnifiedSearch(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="w-full px-4 py-3 border-2 border-indigo-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 uppercase"
+              />
+            </div>
+          )}
 
           {tab === 'overview' && (
             <>
@@ -773,6 +1034,278 @@ export default function AdminDashboard() {
                 </p>
               </div>
             </>
+          )}
+
+          {tab === 'settings' && (
+            <div className="space-y-6">
+              {settingsMsg && (
+                <div className={`text-sm px-4 py-3 rounded-lg font-medium ${settingsMsg.startsWith('✅') ? 'bg-green-50 text-green-700 border-2 border-green-200' : 'bg-red-50 text-red-700 border-2 border-red-200'}`}>
+                  {settingsMsg}
+                </div>
+              )}
+
+              {/* MY OWN ACCOUNT */}
+              <div className="bg-white rounded-xl shadow p-4 sm:p-6">
+                <h2 className="font-bold text-lg text-indigo-900 mb-4 uppercase">👤 MY ACCOUNT</h2>
+                <div className="space-y-3 max-w-md">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">FULL NAME</label>
+                    <input
+                      type="text"
+                      value={ownName}
+                      onChange={(e) => setOwnName(e.target.value)}
+                      className="w-full px-3 py-2 border-2 border-indigo-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">PHONE</label>
+                    <input
+                      type="text"
+                      value={ownPhone}
+                      onChange={(e) => setOwnPhone(e.target.value)}
+                      className="w-full px-3 py-2 border-2 border-indigo-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <button
+                    onClick={saveOwnAccount}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2 rounded-lg text-sm uppercase"
+                  >
+                    💾 SAVE
+                  </button>
+
+                  <div className="border-t pt-4 mt-4">
+                    <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">NEW PASSWORD</label>
+                    <input
+                      type="password"
+                      value={ownPassword}
+                      onChange={(e) => setOwnPassword(e.target.value)}
+                      placeholder="At least 6 characters"
+                      className="w-full px-3 py-2 border-2 border-indigo-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                    />
+                    <button
+                      onClick={changeOwnPassword}
+                      className="mt-2 bg-amber-600 hover:bg-amber-500 text-white font-bold px-4 py-2 rounded-lg text-sm uppercase"
+                    >
+                      🔑 CHANGE PASSWORD
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* MANAGE USERS */}
+              <div className="bg-white rounded-xl shadow p-4 sm:p-6">
+                <h2 className="font-bold text-lg text-indigo-900 mb-4 uppercase">👥 MANAGE ALL USERS</h2>
+
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {[
+                    { id: 'all', label: 'ALL' },
+                    { id: 'customer', label: 'CUSTOMERS' },
+                    { id: 'seller', label: 'SELLERS' },
+                    { id: 'admin', label: 'ADMINS' },
+                  ].map(f => {
+                    const count = f.id === 'all' ? allUsersList.length : allUsersList.filter(u => u.role === f.id).length;
+                    return (
+                      <button
+                        key={f.id}
+                        onClick={() => setSettingsRoleFilter(f.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${settingsRoleFilter === f.id ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700 hover:bg-gray-50'}`}
+                      >
+                        {f.label} ({count})
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <input
+                  type="text"
+                  value={settingsSearch}
+                  onChange={(e) => setSettingsSearch(e.target.value)}
+                  placeholder="🔍 SEARCH BY NAME, EMAIL OR PHONE..."
+                  className="w-full px-4 py-3 border-2 border-indigo-200 rounded-lg text-sm mb-4 uppercase focus:outline-none focus:border-indigo-500"
+                />
+
+                <div className="space-y-2">
+                  {filteredUsers.length === 0 ? (
+                    <p className="text-gray-500 text-sm py-4">No users match.</p>
+                  ) : (
+                    filteredUsers.map(u => (
+                      <div key={u.id} className="bg-gray-50 border rounded-lg p-3 flex flex-wrap justify-between gap-2 items-center">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-gray-800 uppercase truncate">{u.full_name || 'NO NAME'}</p>
+                          <p className="text-xs text-gray-600 truncate">{u.email}</p>
+                          <p className="text-xs text-gray-500">{u.phone || 'No phone'}</p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={`text-[10px] px-2 py-1 rounded font-bold uppercase ${
+                            u.role === 'admin' ? 'bg-purple-100 text-purple-800' :
+                            u.role === 'seller' ? 'bg-green-100 text-green-800' :
+                            'bg-blue-100 text-blue-800'
+                          }`}>{u.role || 'customer'}</span>
+                          {u.is_active === false && (
+                            <span className="text-[10px] px-2 py-1 rounded font-bold uppercase bg-red-100 text-red-800">BANNED</span>
+                          )}
+                          <button
+                            onClick={() => openEditUser(u)}
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase"
+                          >
+                            ✏️ EDIT
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* EDIT USER MODAL */}
+              {editingUser && (
+                <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h2 className="text-lg font-bold text-gray-800 uppercase">EDIT USER</h2>
+                        <p className="text-xs text-gray-500 truncate">{editingUser.email}</p>
+                      </div>
+                      <button onClick={() => { setEditingUser(null); setEditingUserSeller(null); }} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">FULL NAME</label>
+                        <input
+                          type="text"
+                          value={editingUser.full_name || ''}
+                          onChange={(e) => setEditingUser({ ...editingUser, full_name: e.target.value })}
+                          className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">PHONE</label>
+                        <input
+                          type="text"
+                          value={editingUser.phone || ''}
+                          onChange={(e) => setEditingUser({ ...editingUser, phone: e.target.value })}
+                          className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">ROLE</label>
+                          <select
+                            value={editingUser.role || 'customer'}
+                            onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value })}
+                            className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                          >
+                            <option value="customer">CUSTOMER</option>
+                            <option value="seller">SELLER</option>
+                            <option value="admin">ADMIN</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">STATUS</label>
+                          <select
+                            value={editingUser.is_active === false ? 'false' : 'true'}
+                            onChange={(e) => setEditingUser({ ...editingUser, is_active: e.target.value === 'true' })}
+                            className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
+                          >
+                            <option value="true">ACTIVE</option>
+                            <option value="false">BANNED</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {editingUser.role === 'seller' && editingUserSeller && (
+                        <div className="border-t pt-3 mt-3 space-y-3 bg-amber-50 p-3 rounded-lg">
+                          <p className="text-xs font-bold text-amber-800 uppercase">SELLER INFO</p>
+                          <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">WHATSAPP</label>
+                            <input
+                              type="text"
+                              value={editingUserSeller.whatsapp || ''}
+                              onChange={(e) => setEditingUserSeller({ ...editingUserSeller, whatsapp: e.target.value })}
+                              className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">REGION</label>
+                            <input
+                              type="text"
+                              value={editingUserSeller.region || ''}
+                              onChange={(e) => setEditingUserSeller({ ...editingUserSeller, region: e.target.value })}
+                              className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">ADDRESS</label>
+                            <input
+                              type="text"
+                              value={editingUserSeller.address || ''}
+                              onChange={(e) => setEditingUserSeller({ ...editingUserSeller, address: e.target.value })}
+                              className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">📍 DELIVERY POINT 1</label>
+                            <input
+                              type="text"
+                              value={editingUserSeller.location_1 || ''}
+                              onChange={(e) => setEditingUserSeller({ ...editingUserSeller, location_1: e.target.value })}
+                              placeholder="e.g. HTU ENTRANCE"
+                              className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-bold text-gray-700 mb-1 uppercase">📍 DELIVERY POINT 2 (OPTIONAL)</label>
+                            <input
+                              type="text"
+                              value={editingUserSeller.location_2 || ''}
+                              onChange={(e) => setEditingUserSeller({ ...editingUserSeller, location_2: e.target.value })}
+                              placeholder="e.g. POLY ENTRANCE"
+                              className="w-full px-3 py-2 border-2 border-gray-200 rounded-lg text-sm bg-white"
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="border-t pt-3 mt-3">
+                        <label className="block text-xs font-bold text-red-700 mb-1 uppercase">🔑 CHANGE THIS USER'S PASSWORD</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={newPassword}
+                            onChange={(e) => setNewPassword(e.target.value)}
+                            placeholder="New password (min 6 chars)"
+                            className="flex-1 px-3 py-2 border-2 border-red-200 rounded-lg text-sm focus:outline-none focus:border-red-500"
+                          />
+                          <button
+                            onClick={changeUserPassword}
+                            disabled={!newPassword || newPassword.length < 6}
+                            className="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-lg text-xs uppercase disabled:opacity-50"
+                          >
+                            SET
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="border-t pt-3 mt-3 flex gap-2">
+                        <button
+                          onClick={saveUserEdit}
+                          className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-lg text-sm uppercase"
+                        >
+                          💾 SAVE CHANGES
+                        </button>
+                        <button
+                          onClick={deleteUserAccount}
+                          className="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-3 rounded-lg text-sm uppercase"
+                        >
+                          🗑️ DELETE
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
 
           {tab === 'sellers-money' && (
@@ -954,7 +1487,7 @@ export default function AdminDashboard() {
                       </div>
                     )}
                     <div className="space-y-2 mb-3">
-                      {order.items.map(item => (
+                      {(order.items || []).map(item => (
                         <div key={item.id} className="flex items-center gap-3 text-sm border-l-4 border-indigo-300 pl-3 flex-wrap">
                           <div className="w-10 h-10 bg-gray-50 rounded border flex items-center justify-center p-0.5 flex-shrink-0">
                             <img src={item.product_image || 'https://via.placeholder.com/100'} className="max-w-full max-h-full object-contain" />
@@ -963,17 +1496,51 @@ export default function AdminDashboard() {
                             <p className="font-medium text-gray-800 text-xs sm:text-sm">{item.product_name}</p>
                             <p className="text-[10px] sm:text-xs text-gray-500">{item.seller_name} • ×{item.quantity} • GHS {Number(item.subtotal).toFixed(2)}</p>
                           </div>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColor(item.seller_status)}`}>{item.seller_status.toUpperCase()}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColor(item.seller_status || 'placed')}`}>{(item.seller_status || 'placed').toUpperCase()}</span>
                           <button onClick={() => notifySeller(item, order)} className="bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded text-[10px] font-semibold">📲</button>
                         </div>
                       ))}
                     </div>
                     <div className="border-t pt-3 flex flex-wrap justify-between items-center gap-2">
-                      <div className="text-xs text-gray-500 uppercase">💳 {order.payment_method.replace('_', ' ')}</div>
+                      <div className="text-xs text-gray-500 uppercase">💳 {(order.payment_method || '').replace('_', ' ')}</div>
                       <div className="font-bold text-indigo-600 text-sm">GHS {Number(order.total).toFixed(2)}</div>
                     </div>
+
                     <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t">
-                     {order.order_status === 'processing' && <button onClick={() => updateOrderStatus(order.id, 'delivered')} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase">MARK DELIVERED</button>}
+                      {order.order_status === 'placed' && (
+                        <button
+                          onClick={() => updateOrderStatus(order.id, 'processing')}
+                          className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase"
+                        >
+                          ▶️ MARK PROCESSING
+                        </button>
+                      )}
+
+                      {order.order_status === 'processing' && (
+                        <button
+                          onClick={() => updateOrderStatus(order.id, 'delivered')}
+                          className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase"
+                        >
+                          ✅ MARK DELIVERED
+                        </button>
+                      )}
+
+                      {['placed', 'processing'].includes(order.order_status) && (
+                        <button
+                          onClick={() => updateOrderStatus(order.id, 'cancelled')}
+                          className="bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs font-semibold uppercase"
+                        >
+                          ❌ CANCEL
+                        </button>
+                      )}
+
+                      {order.order_status === 'delivered' && (
+                        <span className="text-xs text-green-700 font-semibold uppercase">✅ Delivered</span>
+                      )}
+
+                      {order.order_status === 'cancelled' && (
+                        <span className="text-xs text-red-600 font-semibold uppercase">Order Cancelled</span>
+                      )}
                     </div>
                   </div>
                 ))
@@ -1113,7 +1680,11 @@ export default function AdminDashboard() {
                         {p.is_featured ? '⭐ FEATURED' : '☆ FEATURE'}
                       </button>
                       <button onClick={() => setEditingProduct({ ...p })} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">✏️ EDIT</button>
-                      <button onClick={() => softDeleteProduct(p.id)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">🗑️ HIDE</button>
+                      {!p.is_active ? (
+                        <button onClick={() => restoreProduct(p.id)} className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">♻️ RESTORE</button>
+                      ) : (
+                        <button onClick={() => softDeleteProduct(p.id)} className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-semibold uppercase">🗑️ HIDE</button>
+                      )}
                     </div>
                   </div>
                 ))
