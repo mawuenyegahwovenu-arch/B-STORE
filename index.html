@@ -2,14 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
- <link rel="icon" type="image/png" href="/icon-192.png?v=3" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#312e81" />
     <meta name="description" content="B STORE - Multi-Vendor Marketplace" />
 
-    <!-- PWA -->
     <link rel="manifest" href="/manifest.json" />
-    <!-- Custom Home Screen Icon for iOS -->
     <link rel="apple-touch-icon" href="/icon-512.png" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -18,9 +16,56 @@
 
     <title>B STORE - Multi-Vendor Marketplace</title>
     <script src="https://js.paystack.co/v1/inline.js"></script>
+
+    <style>
+      #splash {
+        position: fixed;
+        inset: 0;
+        background: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        transition: opacity 0.4s ease;
+      }
+      #splash img {
+        width: 70vw;
+        max-width: 320px;
+        height: auto;
+        object-fit: contain;
+        animation: softPulse 1.5s ease-in-out infinite;
+      }
+      @keyframes softPulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50%      { opacity: 0.85; transform: scale(0.98); }
+      }
+    </style>
   </head>
   <body>
+    <div id="splash">
+      <img src="/icon-512.png" alt="B STORE" />
+    </div>
+
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+
+    <script>
+      const SPLASH_MIN_MS = 3500;
+      const startTime = Date.now();
+
+      function hideSplash() {
+        const elapsed = Date.now() - startTime;
+        const wait = Math.max(0, SPLASH_MIN_MS - elapsed);
+        setTimeout(() => {
+          const s = document.getElementById('splash');
+          if (s) {
+            s.style.opacity = '0';
+            setTimeout(() => s.remove(), 500);
+          }
+        }, wait);
+      }
+
+      window.addEventListener('load', hideSplash);
+    </script>
   </body>
 </html>
