@@ -2,6 +2,7 @@ import { Routes, Route } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import TickerBanner from './components/TickerBanner';
+import NoticeModal from './components/NoticeModal';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import BecomeSeller from './pages/BecomeSeller';
@@ -20,11 +21,16 @@ import { useEffect } from 'react';
 
 function App() {
   const location = useLocation();
+
   useEffect(() => {
-  window.scrollTo({ top: 0, behavior: 'instant' });
-}, [location.pathname]);
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }, [location.pathname]);
+
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
+      {/* Global Announcement Notice Modal */}
+      <NoticeModal />
+
       <Navbar />
       {location.pathname === '/' && <TickerBanner />}
       <div className="flex-1">
@@ -42,7 +48,7 @@ function App() {
           <Route path="/order/:id" element={<OrderDetail />} />
           <Route path="/product/:id" element={<ProductDetail />} />
           <Route path="/wishlist" element={<Wishlist />} />
-       <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
         </Routes>
       </div>
       <Footer />

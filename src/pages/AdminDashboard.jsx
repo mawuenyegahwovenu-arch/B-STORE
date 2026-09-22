@@ -4,6 +4,143 @@ import { supabase } from '../supabaseClient';
 import { useAuth } from '../context/AuthContext';
 import NotificationBell from '../components/NotificationBell';
 
+// --- ANNOUNCEMENT FORM COMPONENT ---
+function AdminNoticeForm() {
+  const [title, setTitle] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [statusMsg, setStatusMsg] = useState('');
+  const [recent, setRecent] = useState([]);
+
+  useEffect(() => { loadRecent(); }, []);
+
+  async function loadRecent() {
+    const { data } = await supabase
+      .from('announcements')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(10);
+    setRecent(data || []);
+  }
+
+  const handlePublishNotice = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setStatusMsg('');
+
+    const newNoticeId = `notice-${Date.now()}`;
+
+    const { error } = await supabase.from('announcements').insert([
+      {
+        id: newNoticeId,
+        title: title || 'Important Notice',
+        message: message,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    setLoading(false);
+
+    if (error) {
+      console.error(error);
+      setStatusMsg('❌ Error: ' + error.message);
+    } else {
+      setStatusMsg('✅ Notice published! All users will see this.');
+      setTitle('');
+      setMessage('');
+      loadRecent();
+    }
+  };
+
+  async function deleteNotice(id) {
+    if (!confirm('Delete this notice?')) return;
+    await supabase.from('announcements').delete().eq('id', id);
+    loadRecent();
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 max-w-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-gray-900 uppercase">📢 Broadcaster / Announcements</h3>
+          <span className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-full">
+            Global
+          </span>
+        </div>
+
+        {statusMsg && (
+          <div className={`mb-4 p-3 text-sm font-medium rounded-lg ${statusMsg.startsWith('✅') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+            {statusMsg}
+          </div>
+        )}
+
+        <form onSubmit={handlePublishNotice} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
+              Notice Title
+            </label>
+            <input
+              type="text"
+              required
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="e.g. System Maintenance"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm text-gray-800"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 uppercase mb-1">
+              Announcement Message
+            </label>
+            <textarea
+              required
+              rows="3"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Type your message for all buyers and sellers..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none text-sm text-gray-800"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full sm:w-auto px-6 py-2.5 bg-indigo-900 hover:bg-indigo-800 text-white font-medium text-sm rounded-lg shadow transition duration-200 uppercase disabled:opacity-50"
+          >
+            {loading ? 'Publishing...' : '📢 Broadcast Notice'}
+          </button>
+        </form>
+      </div>
+
+      <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 max-w-2xl">
+        <h3 className="text-sm font-bold text-gray-900 uppercase mb-3">📋 Recent Announcements</h3>
+        {recent.length === 0 ? (
+          <p className="text-sm text-gray-500">No announcements yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {recent.map(n => (
+              <div key={n.id} className="bg-gray-50 border rounded-lg p-3 flex justify-between gap-3 items-start">
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-gray-800 text-sm">{n.title}</p>
+                  <p className="text-xs text-gray-600 mt-0.5 break-words">{n.message}</p>
+                  <p className="text-[10px] text-gray-400 mt-1">{new Date(n.created_at).toLocaleString('en-GB')}</p>
+                </div>
+                <button
+                  onClick={() => deleteNotice(n.id)}
+                  className="bg-red-600 hover:bg-red-500 text-white px-2 py-1 rounded text-[10px] font-semibold uppercase flex-shrink-0"
+                >
+                  🗑️
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const { isAdmin, user, userData } = useAuth();
   const navigate = useNavigate();
@@ -895,6 +1032,7 @@ export default function AdminDashboard() {
     { id: 'add-product', icon: '➕', label: 'ADD PRODUCT', badge: 0 },
     { id: 'payouts', icon: '💰', label: 'PAYOUTS', badge: pendingPayoutsCount },
     { id: 'categories', icon: '📁', label: 'CATEGORIES', badge: 0 },
+    { id: 'announcements', icon: '📢', label: 'ANNOUNCEMENTS', badge: 0 },
     { id: 'settings', icon: '⚙️', label: 'SETTINGS', badge: 0 },
     { id: 'exit', icon: '🚪', label: 'EXIT TO SHOP', badge: 0 },
   ];
@@ -995,7 +1133,7 @@ export default function AdminDashboard() {
         <div className="p-3 sm:p-6">
           <h1 className="hidden md:block text-2xl font-bold text-indigo-900 mb-6 uppercase">ADMIN DASHBOARD</h1>
 
-          {tab !== 'settings' && (
+          {tab !== 'settings' && tab !== 'announcements' && (
             <div className="mb-4">
               <input
                 type="text"
@@ -1036,6 +1174,8 @@ export default function AdminDashboard() {
             </>
           )}
 
+          {tab === 'announcements' && <AdminNoticeForm />}
+
           {tab === 'settings' && (
             <div className="space-y-6">
               {settingsMsg && (
@@ -1044,7 +1184,6 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* MY OWN ACCOUNT */}
               <div className="bg-white rounded-xl shadow p-4 sm:p-6">
                 <h2 className="font-bold text-lg text-indigo-900 mb-4 uppercase">👤 MY ACCOUNT</h2>
                 <div className="space-y-3 max-w-md">
@@ -1092,7 +1231,6 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* MANAGE USERS */}
               <div className="bg-white rounded-xl shadow p-4 sm:p-6">
                 <h2 className="font-bold text-lg text-indigo-900 mb-4 uppercase">👥 MANAGE ALL USERS</h2>
 
@@ -1157,7 +1295,6 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* EDIT USER MODAL */}
               {editingUser && (
                 <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
                   <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">

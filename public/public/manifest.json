@@ -1,24 +1,21 @@
 {
-  "short_name": "B Store",
-  "name": "B Store Marketplace",
-  "description": "B Store - Multi-Vendor E-Commerce Marketplace",
+  "short_name": "B STORE",
+  "name": "B STORE - Multi-Vendor Marketplace",
   "icons": [
     {
-      "src": "/logo192.png",
-      "type": "image/png",
+      "src": "/icon-192.png",
       "sizes": "192x192",
-      "purpose": "any maskable"
+      "type": "image/png"
     },
     {
-      "src": "/logo512.png",
-      "type": "image/png",
+      "src": "/icon-512.png",
       "sizes": "512x512",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ],
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f3f4f6",
   "theme_color": "#312e81",
-  "orientation": "portrait"
+  "background_color": "#ffffff"
 }
